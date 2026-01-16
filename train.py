@@ -44,28 +44,9 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
-
-try:
-    import yaml
-except ImportError:
-    print("错误: 请安装 PyYAML 库")
-    print("运行: pip install pyyaml")
-    exit(1)
-
-try:
-    import nibabel as nib
-except ImportError:
-    print("错误: 请安装 nibabel 库")
-    print("运行: pip install nibabel")
-    exit(1)
-
-try:
-    from scipy.ndimage import zoom
-except ImportError:
-    print("错误: 请安装 scipy 库")
-    print("运行: pip install scipy")
-    exit(1)
-
+import yaml
+import nibabel as nib
+from scipy.ndimage import zoom
 from ctp_classification_model import CTPClassificationNet
 
 

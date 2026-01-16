@@ -1,0 +1,68 @@
+# CTP分类模型训练配置 - 小显存GPU版
+# 适用于GPU显存 <= 8GB 的环境
+
+# ==================== 数据配置 ====================
+csv_file: data_mixed_example.csv
+val_split: 0.2
+num_classes: 2
+
+
+# ==================== 模型配置 ====================
+# 使用较小的ResNet-18模型，减少显存占用
+# ResNet-18参数量: ~11M (vs ResNet-50: ~23M)
+resnet_type: resnet18
+
+# 使用预训练权重
+pretrained: true
+
+
+# ==================== 训练配置 ====================
+# 训练轮数
+epochs: 80
+
+# 小批次大小，降低显存需求
+# 如果仍然OOM，可以降到1
+batch_size: 2
+
+# 学习率
+lr: 0.001
+
+# 权重衰减
+weight_decay: 0.00001
+
+# 类别权重
+class_weights: null
+
+
+# ==================== 早停配置 ====================
+early_stopping: true
+patience: 12
+
+
+# ==================== 其他配置 ====================
+output_dir: ./output/small_gpu_exp
+
+# 减少工作线程数，降低CPU和内存占用
+num_workers: 2
+
+seed: 42
+
+
+# ==================== 显存优化提示 ====================
+# 如果仍然遇到CUDA out of memory错误：
+#
+# 1. 进一步减小batch_size:
+#    batch_size: 1
+#
+# 2. 使用更小的模型（虽然ResNet-18已经很小了）:
+#    - 可以考虑修改模型代码减少learned_features
+#
+# 3. 使用梯度累积（需要修改代码）:
+#    - 模拟大batch_size的效果
+#
+# 4. 使用混合精度训练（需要修改代码添加torch.cuda.amp）:
+#    - 可以减少约50%的显存占用
+#
+# 5. 清空GPU缓存:
+#    import torch
+#    torch.cuda.empty_cache()

@@ -2,6 +2,10 @@
 """
 CTP分类模型训练脚本
 
+支持两种配置方式：
+1. YAML配置文件（推荐）: python train.py --config config.yaml
+2. 命令行参数: python train.py --csv_file data.csv --num_classes 2 ...
+
 CSV格式要求（4列）:
 ctp_path,features_dir,time_points,label
 /path/to/ctp_001.nii.gz,/path/to/features_001/,21,0
@@ -37,6 +41,13 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 
 try:
+    import yaml
+except ImportError:
+    print("错误: 请安装 PyYAML 库")
+    print("运行: pip install pyyaml")
+    exit(1)
+
+try:
     import nibabel as nib
 except ImportError:
     print("错误: 请安装 nibabel 库")
@@ -51,6 +62,49 @@ except ImportError:
     exit(1)
 
 from ctp_classification_model import CTPClassificationNet
+
+
+# ==================== 配置加载 ====================
+def load_config(config_path):
+    """从YAML文件加载配置"""
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    return config
+
+
+def merge_config_with_args(config, args):
+    """
+    合并YAML配置和命令行参数
+    命令行参数优先级更高
+    """
+    # 将config字典转换为Namespace，方便访问
+    from argparse import Namespace
+
+    # 如果没有config，直接返回args
+    if config is None:
+        return args
+
+    # 创建基础配置
+    merged = Namespace()
+
+    # 先应用YAML配置
+    for key, value in config.items():
+        setattr(merged, key, value)
+
+    # 命令行参数覆盖（只覆盖明确指定的参数）
+    for key, value in vars(args).items():
+        if key == 'config':
+            continue
+        # 如果命令行明确指定了参数（不是默认值），则覆盖
+        if value is not None:
+            # 对于布尔值，特殊处理
+            if isinstance(value, bool):
+                if value:  # 如果设置了flag
+                    setattr(merged, key, value)
+            else:
+                setattr(merged, key, value)
+
+    return merged
 
 
 # ==================== Dataset类 ====================
@@ -575,49 +629,115 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='训练CTP分类模型（支持混合T=20/21）')
+    parser = argparse.ArgumentParser(
+        description='训练CTP分类模型（支持混合T=20/21）',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+使用示例:
+  # 使用YAML配置文件（推荐）
+  python train.py --config config.yaml
+
+  # 使用YAML配置 + 命令行覆盖
+  python train.py --config config.yaml --epochs 100 --lr 0.0001
+
+  # 仅使用命令行参数
+  python train.py --csv_file data.csv --num_classes 2 --pretrained
+        """
+    )
+
+    # 配置文件参数
+    parser.add_argument('--config', type=str, default=None,
+                        help='YAML配置文件路径（推荐使用）')
 
     # 数据参数
-    parser.add_argument('--csv_file', type=str, required=True,
+    parser.add_argument('--csv_file', type=str, default=None,
                         help='CSV文件路径，包含ctp_path, features_dir, time_points, label列')
-    parser.add_argument('--val_split', type=float, default=0.2,
+    parser.add_argument('--val_split', type=float, default=None,
                         help='验证集比例 (默认: 0.2)')
-    parser.add_argument('--num_classes', type=int, default=2,
+    parser.add_argument('--num_classes', type=int, default=None,
                         help='分类类别数 (默认: 2)')
 
     # 模型参数
-    parser.add_argument('--resnet_type', type=str, default='resnet50',
+    parser.add_argument('--resnet_type', type=str, default=None,
                         choices=['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152'],
                         help='ResNet类型 (默认: resnet50)')
-    parser.add_argument('--pretrained', action='store_true',
+    parser.add_argument('--pretrained', action='store_true', default=None,
                         help='使用预训练权重')
 
     # 训练参数
-    parser.add_argument('--epochs', type=int, default=50,
+    parser.add_argument('--epochs', type=int, default=None,
                         help='训练轮数 (默认: 50)')
-    parser.add_argument('--batch_size', type=int, default=4,
+    parser.add_argument('--batch_size', type=int, default=None,
                         help='批次大小 (默认: 4)')
-    parser.add_argument('--lr', type=float, default=0.001,
+    parser.add_argument('--lr', type=float, default=None,
                         help='学习率 (默认: 0.001)')
-    parser.add_argument('--weight_decay', type=float, default=1e-5,
+    parser.add_argument('--weight_decay', type=float, default=None,
                         help='权重衰减 (默认: 1e-5)')
     parser.add_argument('--class_weights', type=float, nargs='+', default=None,
                         help='类别权重，例如: --class_weights 1.0 3.0')
 
     # 早停参数
-    parser.add_argument('--early_stopping', action='store_true',
+    parser.add_argument('--early_stopping', action='store_true', default=None,
                         help='启用早停')
-    parser.add_argument('--patience', type=int, default=10,
+    parser.add_argument('--patience', type=int, default=None,
                         help='早停patience (默认: 10)')
 
     # 其他参数
-    parser.add_argument('--output_dir', type=str, default='./output',
+    parser.add_argument('--output_dir', type=str, default=None,
                         help='输出目录 (默认: ./output)')
-    parser.add_argument('--num_workers', type=int, default=4,
+    parser.add_argument('--num_workers', type=int, default=None,
                         help='DataLoader工作线程数 (默认: 4)')
-    parser.add_argument('--seed', type=int, default=42,
+    parser.add_argument('--seed', type=int, default=None,
                         help='随机种子 (默认: 42)')
 
     args = parser.parse_args()
+
+    # 加载配置
+    config = None
+    if args.config:
+        print(f"加载配置文件: {args.config}")
+        config = load_config(args.config)
+        args = merge_config_with_args(config, args)
+    else:
+        # 如果没有配置文件，使用默认值
+        if args.csv_file is None:
+            parser.error("必须指定 --csv_file 或 --config")
+
+        # 设置默认值
+        if args.val_split is None:
+            args.val_split = 0.2
+        if args.num_classes is None:
+            args.num_classes = 2
+        if args.resnet_type is None:
+            args.resnet_type = 'resnet50'
+        if args.pretrained is None:
+            args.pretrained = False
+        if args.epochs is None:
+            args.epochs = 50
+        if args.batch_size is None:
+            args.batch_size = 4
+        if args.lr is None:
+            args.lr = 0.001
+        if args.weight_decay is None:
+            args.weight_decay = 1e-5
+        if args.early_stopping is None:
+            args.early_stopping = False
+        if args.patience is None:
+            args.patience = 10
+        if args.output_dir is None:
+            args.output_dir = './output'
+        if args.num_workers is None:
+            args.num_workers = 4
+        if args.seed is None:
+            args.seed = 42
+
+    # 显示最终配置
+    print("\n" + "=" * 70)
+    print("训练配置:")
+    print("=" * 70)
+    for key, value in sorted(vars(args).items()):
+        if key != 'config':
+            print(f"  {key}: {value}")
+    print("=" * 70)
 
     main(args)

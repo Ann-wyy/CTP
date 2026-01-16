@@ -65,7 +65,44 @@ output = model(ctp_data, prior_maps)
 print(output.shape)  # (2, 2)
 ```
 
-### Training Example
+### Training with YAML Config (Recommended)
+
+```bash
+# 1. Use pre-configured YAML file
+python train.py --config config_basic.yaml
+
+# 2. Or create your own config
+cp config_template.yaml my_config.yaml
+# Edit my_config.yaml with your settings
+python train.py --config my_config.yaml
+
+# 3. Override specific parameters
+python train.py --config config_basic.yaml --epochs 100 --lr 0.0001
+```
+
+**Available config templates:**
+- `config_basic.yaml` - Basic training with default parameters
+- `config_advanced.yaml` - Advanced training with class weights and early stopping
+- `config_small_gpu.yaml` - For GPU memory ≤ 8GB
+- `config_multiclass.yaml` - For 3+ class classification
+- `config_template.yaml` - Full template with all options
+
+See [CONFIG_GUIDE.md](CONFIG_GUIDE.md) for detailed configuration documentation.
+
+### Training with Command Line
+
+```bash
+python train.py \
+  --csv_file data.csv \
+  --num_classes 2 \
+  --resnet_type resnet50 \
+  --pretrained \
+  --epochs 50 \
+  --batch_size 4 \
+  --output_dir ./output
+```
+
+### Training Code Example
 
 ```python
 import torch.nn as nn
@@ -289,6 +326,23 @@ for ctp_data, prior_maps, labels in dataloader:
     scaler.step(optimizer)
     scaler.update()
 ```
+
+## Documentation
+
+Comprehensive guides are available for all aspects of using this model:
+
+| Document | Description |
+|----------|-------------|
+| [CONFIG_GUIDE.md](CONFIG_GUIDE.md) | **YAML configuration guide** - How to use config files for training |
+| [TRAINING_GUIDE.md](TRAINING_GUIDE.md) | Complete training guide with examples and best practices |
+| [CSV_FORMAT.md](CSV_FORMAT.md) | CSV data format specification and examples |
+| [USAGE_GUIDE.md](USAGE_GUIDE.md) | Model usage guide for inference and feature extraction |
+| [README.md](README.md) | This file - project overview and quick start |
+
+**Quick references:**
+- Example configs: `config_*.yaml` files in project root
+- Data validation: `python validate_csv.py your_data.csv`
+- Quick start training: `python quick_start.py`
 
 ## Citation
 

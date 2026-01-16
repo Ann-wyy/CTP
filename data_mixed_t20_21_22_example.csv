@@ -1,0 +1,9 @@
+ctp_path,features_dir,time_points,label
+/data/patient_001/ctp.nii.gz,/data/patient_001/features/,21,0
+/data/patient_002/ctp.nii.gz,/data/patient_002/features/,22,1
+/data/patient_003/ctp.nii.gz,/data/patient_003/features/,21,0
+/data/patient_004/ctp.nii.gz,/data/patient_004/features/,22,1
+/data/patient_005/ctp.nii.gz,/data/patient_005/features/,20,0
+/data/patient_006/ctp.nii.gz,/data/patient_006/features/,21,1
+/data/patient_007/ctp.nii.gz,/data/patient_007/features/,22,0
+/data/patient_008/ctp.nii.gz,/data/patient_008/features/,20,1

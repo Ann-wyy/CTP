@@ -135,38 +135,13 @@ class ModifiedResNet(nn.Module):
 
         base_model = resnet_models[resnet_type](pretrained=pretrained)
 
-        # Modify conv1 to accept custom input channels
+        # Create modified conv1 layer with custom input channels
         original_conv1 = base_model.conv1
-        self.conv1 = nn.Conv2d(
-            in_channels,
-            original_conv1.out_channels,
-            kernel_size=original_conv1.kernel_size,
-            stride=original_conv1.stride,
-            padding=original_conv1.padding,
-            bias=False
-        )
+        self.conv1 = self._create_modified_conv1(original_conv1, in_channels)
 
-        # If pretrained, initialize new conv1 weights intelligently
+        # Initialize conv1 weights from pretrained model if available
         if pretrained:
-            with torch.no_grad():
-                # Repeat the original weights across new channels
-                original_weight = original_conv1.weight.data
-                repeat_times = in_channels // 3
-                remainder = in_channels % 3
-
-                # Repeat the 3-channel weights
-                if repeat_times > 0:
-                    repeated_weight = original_weight.repeat(1, repeat_times, 1, 1)
-                    if remainder > 0:
-                        extra_weight = original_weight[:, :remainder, :, :]
-                        self.conv1.weight.data = torch.cat([repeated_weight, extra_weight], dim=1)
-                    else:
-                        self.conv1.weight.data = repeated_weight
-                else:
-                    self.conv1.weight.data = original_weight[:, :in_channels, :, :]
-
-                # Normalize to maintain magnitude
-                self.conv1.weight.data /= (in_channels / 3)
+            self._initialize_conv1_weights(original_conv1.weight.data, in_channels)
 
         # Keep remaining layers from base model
         self.bn1 = base_model.bn1
@@ -181,6 +156,61 @@ class ModifiedResNet(nn.Module):
         # Replace final fully connected layer
         in_features = base_model.fc.in_features
         self.fc = nn.Linear(in_features, num_classes)
+
+    def _create_modified_conv1(self, original_conv1: nn.Conv2d, in_channels: int) -> nn.Conv2d:
+        """
+        Create a modified conv1 layer with custom input channels.
+
+        Args:
+            original_conv1: Original conv1 layer from base ResNet
+            in_channels: Desired number of input channels
+
+        Returns:
+            Modified conv1 layer
+        """
+        return nn.Conv2d(
+            in_channels,
+            original_conv1.out_channels,
+            kernel_size=original_conv1.kernel_size,
+            stride=original_conv1.stride,
+            padding=original_conv1.padding,
+            bias=False
+        )
+
+    def _initialize_conv1_weights(self, pretrained_weights: torch.Tensor, in_channels: int) -> None:
+        """
+        Initialize conv1 weights by adapting pretrained 3-channel weights to custom channel count.
+
+        Strategy: Repeat the pretrained weights across channels and normalize to maintain
+        similar activation magnitudes.
+
+        Args:
+            pretrained_weights: Original weights from pretrained model (shape: [out_ch, 3, H, W])
+            in_channels: Target number of input channels
+        """
+        with torch.no_grad():
+            PRETRAINED_CHANNELS = 3
+
+            # Calculate how many times to repeat and remaining channels
+            full_repeats = in_channels // PRETRAINED_CHANNELS
+            remaining_channels = in_channels % PRETRAINED_CHANNELS
+
+            # Build new weights by repeating and optionally adding partial weights
+            if full_repeats > 0:
+                # Repeat the full 3-channel weights
+                new_weights = pretrained_weights.repeat(1, full_repeats, 1, 1)
+
+                # Add partial weights if we have remaining channels
+                if remaining_channels > 0:
+                    partial_weights = pretrained_weights[:, :remaining_channels, :, :]
+                    new_weights = torch.cat([new_weights, partial_weights], dim=1)
+            else:
+                # If in_channels < 3, just use subset of pretrained weights
+                new_weights = pretrained_weights[:, :in_channels, :, :]
+
+            # Normalize to maintain magnitude (scale by ratio of channel counts)
+            scaling_factor = PRETRAINED_CHANNELS / in_channels
+            self.conv1.weight.data = new_weights * scaling_factor
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """

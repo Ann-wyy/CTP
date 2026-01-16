@@ -565,29 +565,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='训练CTP分类模型（支持任意混合时间点）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-使用YAML配置文件:
-  # 使用预设配置
-  python train.py --config config_basic.yaml
-
-  # 使用自定义配置
-  python train.py --config my_config.yaml
-
-配置文件模板:
-  - config_basic.yaml       基础配置
-  - config_advanced.yaml    高级配置
-  - config_small_gpu.yaml   小显存GPU配置
-  - config_multiclass.yaml  多分类配置
-  - config_template.yaml    完整模板
-
-查看文档:
-  - CONFIG_GUIDE.md         配置指南
-  - TRAINING_GUIDE.md       训练指南
-  - FLEXIBLE_TIMEPOINTS.md  灵活时间点支持
-        """
-    )
-
-    # 配置文件参数（必需）
     parser.add_argument('--config', type=str, required=True,
                         help='YAML配置文件路径（必需）')
 
@@ -630,3 +607,26 @@ if __name__ == '__main__':
     print("=" * 70)
 
     main(args)
+  """
+使用YAML配置文件:
+  # 使用预设配置
+  python train.py --config config_basic.yaml
+
+  # 使用自定义配置
+  python train.py --config my_config.yaml
+
+配置文件模板:
+  - config_basic.yaml       基础配置
+  - config_advanced.yaml    高级配置
+  - config_small_gpu.yaml   小显存GPU配置
+  - config_multiclass.yaml  多分类配置
+  - config_template.yaml    完整模板
+
+查看文档:
+  - CONFIG_GUIDE.md         配置指南
+  - TRAINING_GUIDE.md       训练指南
+  - FLEXIBLE_TIMEPOINTS.md  灵活时间点支持
+        """
+    )
+
+    # 配置文件参数（必需）

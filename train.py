@@ -2,9 +2,8 @@
 """
 CTP分类模型训练脚本
 
-支持两种配置方式：
-1. YAML配置文件（推荐）: python train.py --config config.yaml
-2. 命令行参数: python train.py --csv_file data.csv --num_classes 2 ...
+使用YAML配置文件进行训练:
+  python train.py --config config.yaml
 
 CSV格式要求（4列）:
 ctp_path,features_dir,time_points,label
@@ -76,41 +75,6 @@ def load_config(config_path):
     with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
     return config
-
-
-def merge_config_with_args(config, args):
-    """
-    合并YAML配置和命令行参数
-    命令行参数优先级更高
-    """
-    # 将config字典转换为Namespace，方便访问
-    from argparse import Namespace
-
-    # 如果没有config，直接返回args
-    if config is None:
-        return args
-
-    # 创建基础配置
-    merged = Namespace()
-
-    # 先应用YAML配置
-    for key, value in config.items():
-        setattr(merged, key, value)
-
-    # 命令行参数覆盖（只覆盖明确指定的参数）
-    for key, value in vars(args).items():
-        if key == 'config':
-            continue
-        # 如果命令行明确指定了参数（不是默认值），则覆盖
-        if value is not None:
-            # 对于布尔值，特殊处理
-            if isinstance(value, bool):
-                if value:  # 如果设置了flag
-                    setattr(merged, key, value)
-            else:
-                setattr(merged, key, value)
-
-    return merged
 
 
 # ==================== Dataset类 ====================
@@ -618,114 +582,70 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='训练CTP分类模型（支持混合T=20/21）',
+        description='训练CTP分类模型（支持任意混合时间点）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-使用示例:
-  # 使用YAML配置文件（推荐）
-  python train.py --config config.yaml
+使用YAML配置文件:
+  # 使用预设配置
+  python train.py --config config_basic.yaml
 
-  # 使用YAML配置 + 命令行覆盖
-  python train.py --config config.yaml --epochs 100 --lr 0.0001
+  # 使用自定义配置
+  python train.py --config my_config.yaml
 
-  # 仅使用命令行参数
-  python train.py --csv_file data.csv --num_classes 2 --pretrained
+配置文件模板:
+  - config_basic.yaml       基础配置
+  - config_advanced.yaml    高级配置
+  - config_small_gpu.yaml   小显存GPU配置
+  - config_multiclass.yaml  多分类配置
+  - config_template.yaml    完整模板
+
+查看文档:
+  - CONFIG_GUIDE.md         配置指南
+  - TRAINING_GUIDE.md       训练指南
+  - FLEXIBLE_TIMEPOINTS.md  灵活时间点支持
         """
     )
 
-    # 配置文件参数
-    parser.add_argument('--config', type=str, default=None,
-                        help='YAML配置文件路径（推荐使用）')
-
-    # 数据参数
-    parser.add_argument('--csv_file', type=str, default=None,
-                        help='CSV文件路径，包含ctp_path, features_dir, time_points, label列')
-    parser.add_argument('--val_split', type=float, default=None,
-                        help='验证集比例 (默认: 0.2)')
-    parser.add_argument('--num_classes', type=int, default=None,
-                        help='分类类别数 (默认: 2)')
-
-    # 模型参数
-    parser.add_argument('--resnet_type', type=str, default=None,
-                        choices=['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152'],
-                        help='ResNet类型 (默认: resnet50)')
-    parser.add_argument('--pretrained', action='store_true', default=None,
-                        help='使用预训练权重')
-
-    # 训练参数
-    parser.add_argument('--epochs', type=int, default=None,
-                        help='训练轮数 (默认: 50)')
-    parser.add_argument('--batch_size', type=int, default=None,
-                        help='批次大小 (默认: 4)')
-    parser.add_argument('--lr', type=float, default=None,
-                        help='学习率 (默认: 0.001)')
-    parser.add_argument('--weight_decay', type=float, default=None,
-                        help='权重衰减 (默认: 1e-5)')
-    parser.add_argument('--class_weights', type=float, nargs='+', default=None,
-                        help='类别权重，例如: --class_weights 1.0 3.0')
-
-    # 早停参数
-    parser.add_argument('--early_stopping', action='store_true', default=None,
-                        help='启用早停')
-    parser.add_argument('--patience', type=int, default=None,
-                        help='早停patience (默认: 10)')
-
-    # 其他参数
-    parser.add_argument('--output_dir', type=str, default=None,
-                        help='输出目录 (默认: ./output)')
-    parser.add_argument('--num_workers', type=int, default=None,
-                        help='DataLoader工作线程数 (默认: 4)')
-    parser.add_argument('--seed', type=int, default=None,
-                        help='随机种子 (默认: 42)')
+    # 配置文件参数（必需）
+    parser.add_argument('--config', type=str, required=True,
+                        help='YAML配置文件路径（必需）')
 
     args = parser.parse_args()
 
-    # 加载配置
-    config = None
-    if args.config:
-        print(f"加载配置文件: {args.config}")
+    # 加载配置文件
+    print(f"加载配置文件: {args.config}")
+    try:
         config = load_config(args.config)
-        args = merge_config_with_args(config, args)
-    else:
-        # 如果没有配置文件，使用默认值
-        if args.csv_file is None:
-            parser.error("必须指定 --csv_file 或 --config")
+    except FileNotFoundError:
+        print(f"错误: 找不到配置文件 '{args.config}'")
+        print("\n提示: 使用以下命令创建配置文件:")
+        print("  cp config_template.yaml my_config.yaml")
+        print("  # 然后编辑 my_config.yaml")
+        exit(1)
+    except Exception as e:
+        print(f"错误: 加载配置文件失败: {e}")
+        exit(1)
 
-        # 设置默认值
-        if args.val_split is None:
-            args.val_split = 0.2
-        if args.num_classes is None:
-            args.num_classes = 2
-        if args.resnet_type is None:
-            args.resnet_type = 'resnet50'
-        if args.pretrained is None:
-            args.pretrained = False
-        if args.epochs is None:
-            args.epochs = 50
-        if args.batch_size is None:
-            args.batch_size = 4
-        if args.lr is None:
-            args.lr = 0.001
-        if args.weight_decay is None:
-            args.weight_decay = 1e-5
-        if args.early_stopping is None:
-            args.early_stopping = False
-        if args.patience is None:
-            args.patience = 10
-        if args.output_dir is None:
-            args.output_dir = './output'
-        if args.num_workers is None:
-            args.num_workers = 4
-        if args.seed is None:
-            args.seed = 42
+    # 将配置转换为Namespace
+    from argparse import Namespace
+    args = Namespace(**config)
+
+    # 验证必需参数
+    required_params = ['csv_file', 'num_classes']
+    missing_params = [p for p in required_params if not hasattr(args, p) or getattr(args, p) is None]
+    if missing_params:
+        print(f"错误: 配置文件缺少必需参数: {missing_params}")
+        print("\n请在配置文件中设置以下参数:")
+        for param in missing_params:
+            print(f"  {param}: <value>")
+        exit(1)
 
     # 显示最终配置
     print("\n" + "=" * 70)
     print("训练配置:")
     print("=" * 70)
     for key, value in sorted(vars(args).items()):
-        if key != 'config':
-            print(f"  {key}: {value}")
+        print(f"  {key}: {value}")
     print("=" * 70)
 
     main(args)

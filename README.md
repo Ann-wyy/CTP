@@ -65,7 +65,7 @@ output = model(ctp_data, prior_maps)
 print(output.shape)  # (2, 2)
 ```
 
-### Training with YAML Config (Recommended)
+### Training with YAML Config
 
 ```bash
 # 1. Use pre-configured YAML file
@@ -75,9 +75,6 @@ python train.py --config config_basic.yaml
 cp config_template.yaml my_config.yaml
 # Edit my_config.yaml with your settings
 python train.py --config my_config.yaml
-
-# 3. Override specific parameters
-python train.py --config config_basic.yaml --epochs 100 --lr 0.0001
 ```
 
 **Available config templates:**
@@ -89,20 +86,7 @@ python train.py --config config_basic.yaml --epochs 100 --lr 0.0001
 
 See [CONFIG_GUIDE.md](CONFIG_GUIDE.md) for detailed configuration documentation.
 
-### Training with Command Line
-
-```bash
-python train.py \
-  --csv_file data.csv \
-  --num_classes 2 \
-  --resnet_type resnet50 \
-  --pretrained \
-  --epochs 50 \
-  --batch_size 4 \
-  --output_dir ./output
-```
-
-### Training Code Example
+### Inference Code Example
 
 ```python
 import torch.nn as nn
@@ -267,22 +251,6 @@ model.load_state_dict(torch.load('ctp_model.pth'))
 model.eval()
 ```
 
-## Examples
-
-Run the example script to see various usage patterns:
-
-```bash
-python example_usage.py
-```
-
-This will demonstrate:
-1. Basic usage
-2. Training loop
-3. Feature extraction
-4. Different configurations
-5. Multi-class classification
-6. Model saving/loading
-
 ## Testing
 
 Run the built-in test:
@@ -342,7 +310,7 @@ Comprehensive guides are available for all aspects of using this model:
 **Quick references:**
 - Example configs: `config_*.yaml` files in project root
 - Data validation: `python validate_csv.py your_data.csv`
-- Quick start training: `python quick_start.py`
+- Quick start training: `python train.py --config config_basic.yaml`
 
 ## Citation
 

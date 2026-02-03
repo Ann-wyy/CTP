@@ -44,6 +44,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
+from torch.cuda.amp import autocast, GradScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 import yaml
@@ -258,13 +259,15 @@ def collate_fn_mixed_timepoints(batch):
 
 
 # ==================== 训练函数 ====================
-def train_epoch(models, optimizers, dataloader, criterion, device, epoch):
+def train_epoch(models, optimizers, dataloader, criterion, device, epoch, scaler=None, use_amp=False):
     """
     训练一个epoch，支持任意混合时间点
 
     Args:
         models: 字典 {time_points: model}
         optimizers: 字典 {time_points: optimizer}
+        scaler: GradScaler for mixed precision training
+        use_amp: 是否使用混合精度训练
     """
     # 将所有模型设置为训练模式
     for model in models.values():
@@ -290,14 +293,25 @@ def train_epoch(models, optimizers, dataloader, criterion, device, epoch):
             prior_maps = prior_maps.to(device)
             labels = labels.to(device)
 
-            # 前向传播
+            # 前向传播（使用混合精度）
             optimizer.zero_grad()
-            outputs = model(ctp_data, prior_maps)
-            loss = criterion(outputs, labels)
 
-            # 反向传播
-            loss.backward()
-            optimizer.step()
+            if use_amp:
+                with autocast():
+                    outputs = model(ctp_data, prior_maps)
+                    loss = criterion(outputs, labels)
+
+                # 反向传播（使用混合精度）
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                outputs = model(ctp_data, prior_maps)
+                loss = criterion(outputs, labels)
+
+                # 反向传播
+                loss.backward()
+                optimizer.step()
 
             # 统计
             running_loss += loss.item()
@@ -317,12 +331,13 @@ def train_epoch(models, optimizers, dataloader, criterion, device, epoch):
     return avg_loss, accuracy
 
 
-def validate(models, dataloader, criterion, device):
+def validate(models, dataloader, criterion, device, use_amp=False):
     """
     验证模型，支持任意混合时间点
 
     Args:
         models: 字典 {time_points: model}
+        use_amp: 是否使用混合精度
     """
     # 将所有模型设置为评估模式
     for model in models.values():
@@ -347,8 +362,13 @@ def validate(models, dataloader, criterion, device):
                 prior_maps = prior_maps.to(device)
                 labels = labels.to(device)
 
-                outputs = model(ctp_data, prior_maps)
-                loss = criterion(outputs, labels)
+                if use_amp:
+                    with autocast():
+                        outputs = model(ctp_data, prior_maps)
+                        loss = criterion(outputs, labels)
+                else:
+                    outputs = model(ctp_data, prior_maps)
+                    loss = criterion(outputs, labels)
 
                 running_loss += loss.item()
                 preds = torch.argmax(outputs, dim=1)
@@ -481,6 +501,17 @@ def main(args):
             optimizer, mode='min', factor=0.5, patience=5
         )
 
+    # 混合精度训练
+    use_amp = getattr(args, 'use_amp', False) and torch.cuda.is_available()
+    scaler = GradScaler() if use_amp else None
+
+    if use_amp:
+        print("\n✓ 启用混合精度训练（FP16）")
+        print("  - 显存占用减少约50%")
+        print("  - 训练速度提升30-50%")
+    else:
+        print("\n使用标准FP32训练")
+
     # 训练循环
     print(f"\n{'='*70}")
     print("开始训练...")
@@ -497,13 +528,13 @@ def main(args):
 
         # 训练
         train_loss, train_acc = train_epoch(
-            models, optimizers, train_loader, criterion, device, epoch
+            models, optimizers, train_loader, criterion, device, epoch, scaler, use_amp
         )
         print(f"训练 - Loss: {train_loss:.4f}, Acc: {train_acc:.4f}")
 
         # 验证
         val_loss, val_acc, val_precision, val_recall, val_f1, val_cm = validate(
-            models, val_loader, criterion, device
+            models, val_loader, criterion, device, use_amp
         )
         print(f"验证 - Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
         print(f"       Precision: {val_precision:.4f}, Recall: {val_recall:.4f}, F1: {val_f1:.4f}")

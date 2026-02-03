@@ -65,6 +65,7 @@ output_dir: ./output/exp_01          # 输出目录
 - **resnet_type**: `resnet18`（快速）| `resnet34` | `resnet50`（推荐）| `resnet101` | `resnet152`（大模型）
 - **batch_size**: 根据GPU显存调整（8GB显存建议1-2，16GB建议2-4）
 - **class_weights**: 类别不平衡时使用，例如 `[1.0, 3.0]` 给第2类3倍权重
+- **use_amp**: 混合精度训练（推荐在A100/V100/RTX 3090上启用，可减少50%显存，加速30-50%）
 
 ### 4. 开始训练
 
@@ -114,7 +115,16 @@ with torch.no_grad():
 A: 支持任意正整数（20、21、22、25等），模型会自动适配。
 
 **Q: 显存不足怎么办？**
-A: 减小`batch_size`（最小为1），使用更小的`resnet_type`（如resnet18）。
+A:
+1. 启用混合精度训练（设置`use_amp: true`，可减少50%显存）
+2. 减小`batch_size`（最小为1）
+3. 使用更小的`resnet_type`（如resnet18）
+
+**Q: 如何加速训练？**
+A:
+1. 启用混合精度训练（设置`use_amp: true`，在A100/V100/RTX 3090上可提速30-50%）
+2. 增大`batch_size`（如果显存允许）
+3. 增加`num_workers`（数据加载线程数）
 
 **Q: 类别不平衡怎么办？**
 A: 在config.yaml中设置`class_weights`，例如`[1.0, 3.0]`给少数类更高权重。

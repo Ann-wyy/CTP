@@ -478,7 +478,7 @@ def main(args):
     schedulers = {}
     for time_points, optimizer in optimizers.items():
         schedulers[time_points] = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=0.5, patience=5, verbose=True
+            optimizer, mode='min', factor=0.5, patience=5
         )
 
     # 训练循环

@@ -596,10 +596,9 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='训练CTP分类模型（支持任意混合时间点）',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    parser.add_argument('--config', type=str, required=True,
-                        help='YAML配置文件路径（必需）')
+        description='训练CTP分类模型（支持任意混合时间点）'
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--config', type=str, required=True,help='YAML配置文件路径（必需）')
 
     args = parser.parse_args()
 
@@ -660,6 +659,4 @@ if __name__ == '__main__':
   - TRAINING_GUIDE.md       训练指南
   - FLEXIBLE_TIMEPOINTS.md  灵活时间点支持
         """
-    )
-
     # 配置文件参数（必需）

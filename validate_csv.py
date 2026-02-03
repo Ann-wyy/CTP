@@ -37,7 +37,7 @@ def validate_csv(csv_file, check_files=False):
 
     # 检查必需列
     print("\n【检查列】")
-    required_cols = ['ctp_path', 'features_dir', 'time_points', 'label']
+    required_cols = ['label', 'nii_path', 'time_points', 'mask_path']
     missing_cols = [col for col in required_cols if col not in df.columns]
 
     if missing_cols:
@@ -49,13 +49,16 @@ def validate_csv(csv_file, check_files=False):
 
     # 检查time_points值
     print("\n【检查time_points】")
-    invalid_tp = df[~df['time_points'].isin([20, 21])]
+    # 检查是否为正整数
+    valid_tp = (df['time_points'] > 0) & (df['time_points'] == df['time_points'].astype(int))
+    invalid_tp = df[~valid_tp]
     if len(invalid_tp) > 0:
-        print(f"❌ 发现 {len(invalid_tp)} 个无效time_points值 (只允许20或21):")
-        print(invalid_tp[['ctp_path', 'time_points']].head())
+        print(f"❌ 发现 {len(invalid_tp)} 个无效time_points值 (必须为正整数):")
+        print(invalid_tp[['nii_path', 'time_points']].head())
         return False
     else:
-        print(f"✓ time_points值有效")
+        unique_tps = sorted(df['time_points'].unique())
+        print(f"✓ time_points值有效，包含时间点: {unique_tps}")
 
     # 检查空值
     print("\n【检查空值】")
@@ -97,8 +100,8 @@ def validate_csv(csv_file, check_files=False):
 
         missing_ctp = []
         for idx, row in df.iterrows():
-            if not Path(row['ctp_path']).exists():
-                missing_ctp.append(row['ctp_path'])
+            if not Path(row['nii_path']).exists():
+                missing_ctp.append(row['nii_path'])
 
         if missing_ctp:
             print(f"❌ 发现 {len(missing_ctp)} 个CTP文件不存在:")
@@ -122,7 +125,7 @@ def validate_csv(csv_file, check_files=False):
         ]
 
         for idx, row in df.iterrows():
-            features_dir = Path(row['features_dir'])
+            features_dir = Path(row['mask_path'])
 
             if not features_dir.exists():
                 missing_features.append(str(features_dir))
@@ -165,7 +168,8 @@ def validate_csv(csv_file, check_files=False):
     print("✅ CSV文件验证通过！")
     print("=" * 70)
     print("\n可以使用以下命令开始训练:")
-    print(f"\npython train.py --csv_file {csv_file} --num_classes {len(label_counts)} --pretrained\n")
+    print(f"\npython train.py --config config.yaml\n")
+    print("（请先在config.yaml中设置csv_file和num_classes等参数）")
 
     return True
 

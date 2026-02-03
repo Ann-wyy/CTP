@@ -23,19 +23,20 @@ pip install -r requirements.txt
 
 ### 2. 准备数据
 
-创建CSV文件，格式如下（4列，无表头）：
+创建CSV文件，格式如下（**必须包含表头**）：
 
 ```csv
-/path/to/ctp_001.nii.gz,/path/to/features_001,20,0
-/path/to/ctp_002.nii.gz,/path/to/features_002,21,1
-/path/to/ctp_003.nii.gz,/path/to/features_003,22,0
+label,nii_path,time_points,mask_path
+0,/path/to/patient001/ctp.nii.gz,20,/path/to/patient001/features
+1,/path/to/patient002/ctp.nii.gz,21,/path/to/patient002/features
+0,/path/to/patient003/ctp.nii.gz,22,/path/to/patient003/features
 ```
 
 **列说明：**
-- 第1列：CTP图像路径（.nii.gz格式，形状为512×512×32×T）
-- 第2列：特征图目录（包含5个.nii.gz文件：generated_cbf.nii.gz, generated_cbv.nii.gz, generated_mtt.nii.gz, generated_tmax.nii.gz, generated_ttp.nii.gz）
-- 第3列：时间点数量（T，可以是20、21、22等任意正整数）
-- 第4列：标签（0=正常，1=异常，支持多分类）
+- **label**: 标签（0=正常，1=异常，支持多分类）
+- **nii_path**: CTP图像路径（.nii.gz格式，形状为512×512×32×T）
+- **time_points**: 时间点数量（T，可以是20、21、22等任意正整数）
+- **mask_path**: 特征图目录（包含5个.nii.gz文件：generated_cbf.nii.gz, generated_cbv.nii.gz, generated_mtt.nii.gz, generated_tmax.nii.gz, generated_ttp.nii.gz）
 
 **验证数据格式：**
 

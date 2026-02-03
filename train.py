@@ -67,17 +67,17 @@ class CTPDataset(Dataset):
     def __init__(self, csv_file, transform=None):
         """
         Args:
-            csv_file: CSV文件路径，包含ctp_path, features_dir, time_points, label列
+            csv_file: CSV文件路径，包含label, nii_path, time_points, mask_path列
             transform: 可选的数据增强函数
         """
         self.data_df = pd.read_csv(csv_file)
         self.transform = transform
 
-        # 验证CSV格式
-        required_columns = ['ctp_path', 'features_dir', 'time_points', 'label']
+        # 验证CSV格式（支持两种列名格式）
+        required_columns = ['label', 'nii_path', 'time_points', 'mask_path']
         for col in required_columns:
             if col not in self.data_df.columns:
-                raise ValueError(f"CSV文件缺少必需列: {col}")
+                raise ValueError(f"CSV文件缺少必需列: {col}，当前列名: {list(self.data_df.columns)}")
 
         # 验证time_points为正整数
         valid_time_points = (self.data_df['time_points'] > 0) & (self.data_df['time_points'] == self.data_df['time_points'].astype(int))
@@ -103,10 +103,10 @@ class CTPDataset(Dataset):
         time_points = int(row['time_points'])
 
         # 加载CTP数据
-        ctp_data = self._load_ctp(row['ctp_path'], expected_time_points=time_points)
+        ctp_data = self._load_ctp(row['nii_path'], expected_time_points=time_points)
 
         # 加载5个特征图
-        prior_maps = self._load_prior_maps(row['features_dir'])
+        prior_maps = self._load_prior_maps(row['mask_path'])
 
         # 获取标签
         label = int(row['label'])

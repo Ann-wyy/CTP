@@ -1,11 +1,8 @@
-# CTP分类模型训练配置模板
-# 复制此文件并根据您的需求修改
-# cp config_template.yaml my_config.yaml
+# CTP分类模型训练配置
+# 根据您的实际情况修改下面的参数
 
 # ==================== 数据配置 ====================
-# CSV数据文件路径（必需）
-# CSV格式: ctp_path,features_dir,time_points,label
-csv_file: /path/to/your/data.csv
+csv_file: data_example.csv  # CSV数据文件路径
 
 # 验证集比例（0.1-0.3之间）
 val_split: 0.2
@@ -85,36 +82,14 @@ num_workers: 4
 seed: 42
 
 
-# ==================== 配置建议 ====================
+# ==================== 使用提示 ====================
+# 1. 准备CSV数据文件（格式见data_example.csv）
+# 2. 验证数据: python validate_csv.py your_data.csv
+# 3. 修改上面的参数（特别是csv_file和output_dir）
+# 4. 开始训练: python train.py --config config.yaml
 #
-# 【首次训练】
-# 1. 使用默认配置或config_basic.yaml
-# 2. 训练5-10个epoch观察是否正常
-# 3. 检查loss是否下降、准确率是否提升
-#
-# 【类别不平衡】
-# 1. 查看数据分布: python validate_csv.py data.csv
-# 2. 计算权重并设置class_weights
-# 3. 观察混淆矩阵是否改善
-#
-# 【过拟合】
-# 现象: 训练准确率高，验证准确率低
-# 解决:
-#   - 启用early_stopping
-#   - 增大weight_decay
-#   - 使用数据增强
-#   - 使用更小的模型(resnet18)
-#
-# 【欠拟合】
-# 现象: 训练和验证准确率都低
-# 解决:
-#   - 增加epochs
-#   - 使用更大的模型(resnet101)
-#   - 降低weight_decay
-#   - 提高学习率
-#
-# 【显存不足】
-# 解决:
-#   - 减小batch_size
-#   - 使用更小的模型(resnet18)
-#   - 减少num_workers
+# 常见问题:
+# - 显存不足: 减小batch_size或使用resnet18
+# - 类别不平衡: 设置class_weights，如[1.0, 3.0]
+# - 过拟合: 启用early_stopping，增大weight_decay
+# - 欠拟合: 增加epochs，使用更大的模型

@@ -1,0 +1,4 @@
+/path/to/patient001/ctp.nii.gz,/path/to/patient001/features,20,0
+/path/to/patient002/ctp.nii.gz,/path/to/patient002/features,21,1
+/path/to/patient003/ctp.nii.gz,/path/to/patient003/features,21,0
+/path/to/patient004/ctp.nii.gz,/path/to/patient004/features,22,1

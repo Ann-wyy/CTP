@@ -19,28 +19,48 @@ from typing import Optional, Tuple
 
 class FrontendEncoder(nn.Module):
     """
-    Frontend encoder that processes raw CTP 4D data.
+    Frontend encoder that processes raw CTP 4D data using 3D convolutions.
 
-    Converts (B, 512, 512, 32, T) -> (B, 32*T, 512, 512) -> (B, 155, 512, 512)
-    using a small CNN with 1x1 Conv + BN + ReLU + 3x3 Conv.
+    Converts (B, 512, 512, 32, T) -> (B, 32, T, 512, 512) -> (B, 155, 512, 512)
+    using 3D CNN with temporal convolutions + adaptive pooling.
+
+    Supports arbitrary time points (T can be any value: 20, 21, 22, etc.)
     """
 
-    def __init__(self, in_channels: int = 672, out_channels: int = 155):
+    def __init__(self, out_channels: int = 155):
         """
         Args:
-            in_channels: Number of input channels (32*21=672 or 32*20=640)
             out_channels: Number of output learned features (default: 155)
         """
         super(FrontendEncoder, self).__init__()
 
-        # Small frontend CNN
-        self.encoder = nn.Sequential(
-            # 1x1 Conv to reduce dimensions
-            nn.Conv2d(in_channels, 256, kernel_size=1, stride=1, padding=0, bias=False),
+        # 3D convolution to learn spatio-temporal features
+        self.conv3d_1 = nn.Sequential(
+            # First 3D conv: learn temporal dynamics
+            nn.Conv3d(32, 64, kernel_size=(3, 3, 3), stride=1, padding=(1, 1, 1), bias=False),
+            nn.BatchNorm3d(64),
+            nn.ReLU(inplace=True)
+        )
+
+        self.conv3d_2 = nn.Sequential(
+            # Second 3D conv: deeper temporal features
+            nn.Conv3d(64, 128, kernel_size=(3, 3, 3), stride=1, padding=(1, 1, 1), bias=False),
+            nn.BatchNorm3d(128),
+            nn.ReLU(inplace=True)
+        )
+
+        # Adaptive pooling to handle variable time points
+        # Pool temporal dimension to fixed size (8 time steps)
+        self.temporal_pool = nn.AdaptiveAvgPool3d((8, None, None))
+
+        # 2D convolution for final spatial feature extraction
+        self.conv2d = nn.Sequential(
+            # Reduce channels: 128*8 -> 256
+            nn.Conv2d(128 * 8, 256, kernel_size=1, stride=1, padding=0, bias=False),
             nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
 
-            # 3x3 Conv for spatial feature extraction
+            # Spatial features: 256 -> out_channels
             nn.Conv2d(256, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
@@ -49,19 +69,29 @@ class FrontendEncoder(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x: Input CTP data of shape (B, 512, 512, 32, T) where T is 20 or 21
+            x: Input CTP data of shape (B, 512, 512, 32, T) where T can be any positive integer
 
         Returns:
             Learned features of shape (B, 155, 512, 512)
         """
         B, H, W, Z, T = x.shape
 
-        # Reshape: (B, 512, 512, 32, T) -> (B, 32*T, 512, 512)
+        # Reshape: (B, 512, 512, 32, T) -> (B, 32, T, 512, 512)
         x = x.permute(0, 3, 4, 1, 2)  # (B, 32, T, 512, 512)
-        x = x.reshape(B, Z * T, H, W)  # (B, 32*T, 512, 512)
 
-        # Apply frontend encoder
-        x = self.encoder(x)  # (B, 155, 512, 512)
+        # 3D convolutions: learn spatio-temporal features
+        x = self.conv3d_1(x)  # (B, 64, T, 512, 512)
+        x = self.conv3d_2(x)  # (B, 128, T, 512, 512)
+
+        # Adaptive temporal pooling: handle variable T
+        x = self.temporal_pool(x)  # (B, 128, 8, 512, 512)
+
+        # Flatten temporal dimension
+        B, C, T_pooled, H, W = x.shape
+        x = x.reshape(B, C * T_pooled, H, W)  # (B, 1024, 512, 512)
+
+        # 2D convolutions: final spatial features
+        x = self.conv2d(x)  # (B, 155, 512, 512)
 
         return x
 
@@ -261,7 +291,7 @@ class CTPClassificationNet(nn.Module):
     ):
         """
         Args:
-            num_time_points: Number of time points in CTP sequence (20 or 21)
+            num_time_points: Number of time points (kept for compatibility, but model handles any T)
             num_classes: Number of classification classes (default: 2)
             resnet_type: Type of ResNet backbone
             pretrained: Whether to use pretrained ResNet weights
@@ -270,12 +300,11 @@ class CTPClassificationNet(nn.Module):
         """
         super(CTPClassificationNet, self).__init__()
 
-        self.num_time_points = num_time_points
-        in_channels_frontend = 32 * num_time_points  # 672 for T=21, 640 for T=20
+        self.num_time_points = num_time_points  # For compatibility, actual T is flexible
 
-        # Frontend encoder for raw CTP data
+        # Frontend encoder for raw CTP data (3D convolutions)
+        # Now handles arbitrary time points via adaptive pooling
         self.frontend_encoder = FrontendEncoder(
-            in_channels=in_channels_frontend,
             out_channels=learned_features
         )
 

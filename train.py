@@ -1,29 +1,30 @@
 #!/usr/bin/env python3
 """
-CTP分类模型训练脚本
+CTP分类模型训练脚本（统一3D卷积模型）
 
 使用YAML配置文件进行训练:
   python train.py --config config.yaml
 
-CSV格式要求（4列）:
-ctp_path,features_dir,time_points,label
-/path/to/ctp_001.nii.gz,/path/to/features_001/,21,0
-/path/to/ctp_002.nii.gz,/path/to/features_002/,22,1
-/path/to/ctp_003.nii.gz,/path/to/features_003/,20,0
+CSV格式要求（4列，带表头）:
+label,nii_path,time_points,mask_path
+0,/path/to/ctp_001.nii.gz,21,/path/to/features_001/
+1,/path/to/ctp_002.nii.gz,22,/path/to/features_002/
+0,/path/to/ctp_003.nii.gz,20,/path/to/features_003/
 ...
 
 说明：
-- ctp_path: CTP数据文件路径 (.nii.gz)
-- features_dir: 特征图所在目录（包含5个.nii.gz文件）
-- time_points: 时间点数量（正整数，如20, 21, 22等）
 - label: 分类标签（0, 1, 2, ...）
+- nii_path: CTP数据文件路径 (.nii.gz)
+- time_points: 时间点数量（正整数，如20, 21, 22等）
+- mask_path: 特征图所在目录（包含5个.nii.gz文件）
 
 特性：
-- ✅ 支持任意时间点数（20, 21, 22, ...）
+- ✅ 使用统一的3D卷积模型处理任意时间点
 - ✅ 支持混合时间点的数据集（同一个数据集可包含不同时间点）
-- ✅ 自动为每个时间点创建独立模型
+- ✅ 通过自适应池化自动处理不同时间点，无需多个模型
+- ✅ 支持混合精度训练（AMP）减少显存占用
 
-features_dir中应包含:
+mask_path目录中应包含:
 - generated_cbf.nii.gz
 - generated_cbv.nii.gz
 - generated_mtt.nii.gz
@@ -63,7 +64,7 @@ def load_config(config_path):
 
 # ==================== Dataset类 ====================
 class CTPDataset(Dataset):
-    """CTP数据集类，支持混合T=20和T=21的数据"""
+    """CTP数据集类，支持任意混合时间点数据（T=20, 21, 22, ...）"""
 
     def __init__(self, csv_file, transform=None):
         """
@@ -233,92 +234,80 @@ class CTPDataset(Dataset):
         return resized
 
 
-def collate_fn_mixed_timepoints(batch):
+def collate_fn_default(batch):
     """
-    自定义collate函数，处理混合时间点的batch
-    自动按时间点分组，支持任意时间点数（20, 21, 22等）
-    """
-    from collections import defaultdict
+    标准collate函数，直接堆叠batch数据
 
-    # 按时间点分组
-    grouped_items = defaultdict(list)
+    3D卷积模型通过AdaptivePooling处理不同时间点，
+    因此不再需要按time_points分组
+    """
+    ctp_data_list = []
+    prior_maps_list = []
+    labels_list = []
 
     for ctp_data, prior_maps, label, time_points in batch:
-        grouped_items[time_points].append((ctp_data, prior_maps, label))
+        ctp_data_list.append(ctp_data)
+        prior_maps_list.append(prior_maps)
+        labels_list.append(label)
 
-    # 构建批次列表
-    batches = []
+    # Stack成batch
+    ctp_batch = torch.stack(ctp_data_list)
+    prior_batch = torch.stack(prior_maps_list)
+    label_batch = torch.stack(labels_list)
 
-    for time_points, items in grouped_items.items():
-        ctp_batch = torch.stack([item[0] for item in items])
-        prior_batch = torch.stack([item[1] for item in items])
-        label_batch = torch.stack([item[2] for item in items])
-        batches.append((ctp_batch, prior_batch, label_batch, time_points))
-
-    return batches
+    return ctp_batch, prior_batch, label_batch
 
 
 # ==================== 训练函数 ====================
-def train_epoch(models, optimizers, dataloader, criterion, device, epoch, scaler=None, use_amp=False):
+def train_epoch(model, optimizer, dataloader, criterion, device, epoch, scaler=None, use_amp=False):
     """
-    训练一个epoch，支持任意混合时间点
+    训练一个epoch，使用统一的3D卷积模型
 
     Args:
-        models: 字典 {time_points: model}
-        optimizers: 字典 {time_points: optimizer}
+        model: 统一的CTP分类模型
+        optimizer: 优化器
         scaler: GradScaler for mixed precision training
         use_amp: 是否使用混合精度训练
     """
-    # 将所有模型设置为训练模式
-    for model in models.values():
-        model.train()
+    model.train()
 
     running_loss = 0.0
     all_preds = []
     all_labels = []
     num_batches = 0
 
-    for batch_list in dataloader:
-        for ctp_data, prior_maps, labels, time_points in batch_list:
-            # 选择对应时间点的模型和优化器
-            model = models.get(time_points)
-            optimizer = optimizers.get(time_points)
+    for ctp_data, prior_maps, labels in dataloader:
+        # 移动到设备
+        ctp_data = ctp_data.to(device)
+        prior_maps = prior_maps.to(device)
+        labels = labels.to(device)
 
-            if model is None or optimizer is None:
-                print(f"警告: 没有为时间点T={time_points}创建模型，跳过此批次")
-                continue
+        # 前向传播（使用混合精度）
+        optimizer.zero_grad()
 
-            # 移动到设备
-            ctp_data = ctp_data.to(device)
-            prior_maps = prior_maps.to(device)
-            labels = labels.to(device)
-
-            # 前向传播（使用混合精度）
-            optimizer.zero_grad()
-
-            if use_amp:
-                with autocast():
-                    outputs = model(ctp_data, prior_maps)
-                    loss = criterion(outputs, labels)
-
-                # 反向传播（使用混合精度）
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
-            else:
+        if use_amp:
+            with autocast():
                 outputs = model(ctp_data, prior_maps)
                 loss = criterion(outputs, labels)
 
-                # 反向传播
-                loss.backward()
-                optimizer.step()
+            # 反向传播（使用混合精度）
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            outputs = model(ctp_data, prior_maps)
+            loss = criterion(outputs, labels)
 
-            # 统计
-            running_loss += loss.item()
-            preds = torch.argmax(outputs, dim=1)
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
-            num_batches += 1
+            # 反向传播
+            loss.backward()
+            optimizer.step()
+
+        # 统计
+        running_loss += loss.item()
+        preds = torch.argmax(outputs, dim=1)
+        all_preds.extend(preds.cpu().numpy())
+        all_labels.extend(labels.cpu().numpy())
+        num_batches += 1
 
         # 打印进度
         if num_batches % 10 == 0:
@@ -331,17 +320,18 @@ def train_epoch(models, optimizers, dataloader, criterion, device, epoch, scaler
     return avg_loss, accuracy
 
 
-def validate(models, dataloader, criterion, device, use_amp=False):
+def validate(model, dataloader, criterion, device, use_amp=False):
     """
-    验证模型，支持任意混合时间点
+    验证模型，使用统一的3D卷积模型
 
     Args:
-        models: 字典 {time_points: model}
+        model: 统一的CTP分类模型
+        dataloader: 验证数据加载器
+        criterion: 损失函数
+        device: 计算设备
         use_amp: 是否使用混合精度
     """
-    # 将所有模型设置为评估模式
-    for model in models.values():
-        model.eval()
+    model.eval()
 
     running_loss = 0.0
     all_preds = []
@@ -349,32 +339,24 @@ def validate(models, dataloader, criterion, device, use_amp=False):
     num_batches = 0
 
     with torch.no_grad():
-        for batch_list in dataloader:
-            for ctp_data, prior_maps, labels, time_points in batch_list:
-                # 选择对应时间点的模型
-                model = models.get(time_points)
+        for ctp_data, prior_maps, labels in dataloader:
+            ctp_data = ctp_data.to(device)
+            prior_maps = prior_maps.to(device)
+            labels = labels.to(device)
 
-                if model is None:
-                    print(f"警告: 没有为时间点T={time_points}创建模型，跳过此批次")
-                    continue
-
-                ctp_data = ctp_data.to(device)
-                prior_maps = prior_maps.to(device)
-                labels = labels.to(device)
-
-                if use_amp:
-                    with autocast():
-                        outputs = model(ctp_data, prior_maps)
-                        loss = criterion(outputs, labels)
-                else:
+            if use_amp:
+                with autocast():
                     outputs = model(ctp_data, prior_maps)
                     loss = criterion(outputs, labels)
+            else:
+                outputs = model(ctp_data, prior_maps)
+                loss = criterion(outputs, labels)
 
-                running_loss += loss.item()
-                preds = torch.argmax(outputs, dim=1)
-                all_preds.extend(preds.cpu().numpy())
-                all_labels.extend(labels.cpu().numpy())
-                num_batches += 1
+            running_loss += loss.item()
+            preds = torch.argmax(outputs, dim=1)
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+            num_batches += 1
 
     # 计算指标
     avg_loss = running_loss / max(num_batches, 1)
@@ -397,7 +379,7 @@ def validate(models, dataloader, criterion, device, use_amp=False):
 # ==================== 主训练流程 ====================
 def main(args):
     print("=" * 70)
-    print("CTP分类模型训练（支持任意混合时间点）")
+    print("CTP分类模型训练（统一3D卷积模型）")
     print("=" * 70)
 
     # 设置随机种子
@@ -448,7 +430,7 @@ def main(args):
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        collate_fn=collate_fn_mixed_timepoints,
+        collate_fn=collate_fn_default,
         pin_memory=True if device.type == 'cuda' else False
     )
 
@@ -457,33 +439,29 @@ def main(args):
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        collate_fn=collate_fn_mixed_timepoints,
+        collate_fn=collate_fn_default,
         pin_memory=True if device.type == 'cuda' else False
     )
 
-    # 创建模型（根据数据自动创建所需的模型）
+    # 创建统一的3D卷积模型（可处理任意时间点）
     print(f"\n{'='*70}")
     print("创建模型...")
     print(f"{'='*70}")
 
-    models = {}
-    optimizers = {}
+    print("创建统一的3D卷积模型（支持任意时间点）...")
+    model = CTPClassificationNet(
+        num_time_points=21,  # 参数保留用于兼容性，实际模型可处理任意T
+        num_classes=args.num_classes,
+        resnet_type=args.resnet_type,
+        pretrained=args.pretrained
+    ).to(device)
 
-    for time_points in unique_time_points:
-        print(f"创建 T={time_points} 模型...")
-        model = CTPClassificationNet(
-            num_time_points=int(time_points),
-            num_classes=args.num_classes,
-            resnet_type=args.resnet_type,
-            pretrained=args.pretrained
-        ).to(device)
-        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # 创建优化器
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-        models[time_points] = model
-        optimizers[time_points] = optimizer
-
-        num_params = sum(p.numel() for p in model.parameters())
-        print(f"  T={time_points} 模型参数: {num_params:,}")
+    num_params = sum(p.numel() for p in model.parameters())
+    print(f"模型参数量: {num_params:,}")
+    print(f"模型支持的时间点: 任意 (通过3D卷积+自适应池化实现)")
 
     # 定义损失函数
     if args.class_weights:
@@ -495,11 +473,9 @@ def main(args):
         print("\n使用标准交叉熵损失")
 
     # 学习率调度器
-    schedulers = {}
-    for time_points, optimizer in optimizers.items():
-        schedulers[time_points] = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=0.5, patience=5
-        )
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5
+    )
 
     # 混合精度训练
     use_amp = getattr(args, 'use_amp', False) and torch.cuda.is_available()
@@ -528,21 +504,20 @@ def main(args):
 
         # 训练
         train_loss, train_acc = train_epoch(
-            models, optimizers, train_loader, criterion, device, epoch, scaler, use_amp
+            model, optimizer, train_loader, criterion, device, epoch, scaler, use_amp
         )
         print(f"训练 - Loss: {train_loss:.4f}, Acc: {train_acc:.4f}")
 
         # 验证
         val_loss, val_acc, val_precision, val_recall, val_f1, val_cm = validate(
-            models, val_loader, criterion, device, use_amp
+            model, val_loader, criterion, device, use_amp
         )
         print(f"验证 - Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
         print(f"       Precision: {val_precision:.4f}, Recall: {val_recall:.4f}, F1: {val_f1:.4f}")
         print(f"混淆矩阵:\n{val_cm}")
 
         # 学习率调度
-        for scheduler in schedulers.values():
-            scheduler.step(val_loss)
+        scheduler.step(val_loss)
 
         # 保存历史
         train_history.append({'epoch': epoch+1, 'loss': train_loss, 'acc': train_acc})
@@ -556,17 +531,14 @@ def main(args):
             best_val_f1 = val_f1
             patience_counter = 0
 
-            # 保存所有时间点的模型
-            for time_points, model in models.items():
-                optimizer = optimizers[time_points]
-                torch.save({
-                    'epoch': epoch + 1,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'val_f1': val_f1,
-                    'time_points': time_points,
-                    'args': vars(args)
-                }, output_dir / f'best_model_t{time_points}.pth')
+            # 保存统一模型
+            torch.save({
+                'epoch': epoch + 1,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_f1': val_f1,
+                'args': vars(args)
+            }, output_dir / 'best_model.pth')
 
             print(f"✓ 保存最佳模型 (F1: {val_f1:.4f})")
         else:
@@ -596,7 +568,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='训练CTP分类模型（支持任意混合时间点）',
+        description='训练CTP分类模型（统一3D卷积模型，支持任意混合时间点）',
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--config', type=str, required=True,help='YAML配置文件路径（必需）')
 

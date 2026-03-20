@@ -45,7 +45,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 import yaml
@@ -286,12 +286,14 @@ def train_epoch(model, optimizer, dataloader, criterion, device, epoch, scaler=N
         optimizer.zero_grad()
 
         if use_amp:
-            with autocast():
+            with autocast(device_type='cuda'):
                 outputs = model(ctp_data, prior_maps)
                 loss = criterion(outputs, labels)
 
             # 反向传播（使用混合精度）
             scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
         else:
@@ -300,6 +302,7 @@ def train_epoch(model, optimizer, dataloader, criterion, device, epoch, scaler=N
 
             # 反向传播
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
         # 统计
@@ -345,7 +348,7 @@ def validate(model, dataloader, criterion, device, use_amp=False):
             labels = labels.to(device)
 
             if use_amp:
-                with autocast():
+                with autocast(device_type='cuda'):
                     outputs = model(ctp_data, prior_maps)
                     loss = criterion(outputs, labels)
             else:
@@ -382,9 +385,12 @@ def main(args):
     print("CTP分类模型训练（统一3D卷积模型）")
     print("=" * 70)
 
-    # 设置随机种子
+    # 设置随机种子（确保完全可复现）
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+        torch.backends.cudnn.benchmark = True  # 固定输入尺寸时加速卷积
 
     # 设置设备
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -456,8 +462,8 @@ def main(args):
         pretrained=args.pretrained
     ).to(device)
 
-    # 创建优化器
-    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # 创建优化器（AdamW正确实现权重衰减解耦，比Adam更优）
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     num_params = sum(p.numel() for p in model.parameters())
     print(f"模型参数量: {num_params:,}")
@@ -479,7 +485,7 @@ def main(args):
 
     # 混合精度训练
     use_amp = getattr(args, 'use_amp', False) and torch.cuda.is_available()
-    scaler = GradScaler() if use_amp else None
+    scaler = GradScaler(device='cuda') if use_amp else None
 
     if use_amp:
         print("\n✓ 启用混合精度训练（FP16）")
@@ -611,24 +617,3 @@ if __name__ == '__main__':
     print("=" * 70)
 
     main(args)
-"""
-使用YAML配置文件:
-  # 使用预设配置
-  python train.py --config config_basic.yaml
-
-  # 使用自定义配置
-  python train.py --config my_config.yaml
-
-配置文件模板:
-  - config_basic.yaml       基础配置
-  - config_advanced.yaml    高级配置
-  - config_small_gpu.yaml   小显存GPU配置
-  - config_multiclass.yaml  多分类配置
-  - config_template.yaml    完整模板
-
-查看文档:
-  - CONFIG_GUIDE.md         配置指南
-  - TRAINING_GUIDE.md       训练指南
-  - FLEXIBLE_TIMEPOINTS.md  灵活时间点支持
-        """
-    # 配置文件参数（必需）

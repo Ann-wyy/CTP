@@ -13,7 +13,11 @@ Architecture:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152
+from torchvision.models import (
+    resnet18, resnet34, resnet50, resnet101, resnet152,
+    ResNet18_Weights, ResNet34_Weights, ResNet50_Weights,
+    ResNet101_Weights, ResNet152_Weights,
+)
 from typing import Optional, Tuple
 
 
@@ -21,8 +25,12 @@ class FrontendEncoder(nn.Module):
     """
     Frontend encoder that processes raw CTP 4D data using 3D convolutions.
 
-    Converts (B, 512, 512, 32, T) -> (B, 32, T, 512, 512) -> (B, 155, 512, 512)
-    using 3D CNN with temporal convolutions + adaptive pooling.
+    Converts (B, 512, 512, 32, T) -> (B, 32, T, 512, 512) -> (B, 155, 128, 128)
+    using 3D CNN with temporal convolutions + spatial downsampling + adaptive pooling.
+
+    Spatial downsampling (512->256->128) is critical to keep memory usage feasible:
+      - Without downsampling: (B, 128, T, 512, 512) ~10 GB at batch_size=4
+      - With downsampling:    (B, 128, T, 128, 128)  ~670 MB at batch_size=4
 
     Supports arbitrary time points (T can be any value: 20, 21, 22, etc.)
     """
@@ -35,16 +43,16 @@ class FrontendEncoder(nn.Module):
         super(FrontendEncoder, self).__init__()
 
         # 3D convolution to learn spatio-temporal features
+        # stride=(1,2,2): keeps temporal dim, halves spatial dims 512->256
         self.conv3d_1 = nn.Sequential(
-            # First 3D conv: learn temporal dynamics
-            nn.Conv3d(32, 64, kernel_size=(3, 3, 3), stride=1, padding=(1, 1, 1), bias=False),
+            nn.Conv3d(32, 64, kernel_size=(3, 3, 3), stride=(1, 2, 2), padding=(1, 1, 1), bias=False),
             nn.BatchNorm3d(64),
             nn.ReLU(inplace=True)
         )
 
+        # stride=(1,2,2): keeps temporal dim, halves spatial dims 256->128
         self.conv3d_2 = nn.Sequential(
-            # Second 3D conv: deeper temporal features
-            nn.Conv3d(64, 128, kernel_size=(3, 3, 3), stride=1, padding=(1, 1, 1), bias=False),
+            nn.Conv3d(64, 128, kernel_size=(3, 3, 3), stride=(1, 2, 2), padding=(1, 1, 1), bias=False),
             nn.BatchNorm3d(128),
             nn.ReLU(inplace=True)
         )
@@ -55,7 +63,7 @@ class FrontendEncoder(nn.Module):
 
         # 2D convolution for final spatial feature extraction
         self.conv2d = nn.Sequential(
-            # Reduce channels: 128*8 -> 256
+            # Reduce channels: 128*8=1024 -> 256
             nn.Conv2d(128 * 8, 256, kernel_size=1, stride=1, padding=0, bias=False),
             nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
@@ -72,26 +80,26 @@ class FrontendEncoder(nn.Module):
             x: Input CTP data of shape (B, 512, 512, 32, T) where T can be any positive integer
 
         Returns:
-            Learned features of shape (B, 155, 512, 512)
+            Learned features of shape (B, out_channels, 128, 128)
         """
         B, H, W, Z, T = x.shape
 
         # Reshape: (B, 512, 512, 32, T) -> (B, 32, T, 512, 512)
         x = x.permute(0, 3, 4, 1, 2)  # (B, 32, T, 512, 512)
 
-        # 3D convolutions: learn spatio-temporal features
-        x = self.conv3d_1(x)  # (B, 64, T, 512, 512)
-        x = self.conv3d_2(x)  # (B, 128, T, 512, 512)
+        # 3D convolutions with spatial downsampling
+        x = self.conv3d_1(x)  # (B, 64, T, 256, 256)
+        x = self.conv3d_2(x)  # (B, 128, T, 128, 128)
 
         # Adaptive temporal pooling: handle variable T
-        x = self.temporal_pool(x)  # (B, 128, 8, 512, 512)
+        x = self.temporal_pool(x)  # (B, 128, 8, 128, 128)
 
         # Flatten temporal dimension
         B, C, T_pooled, H, W = x.shape
-        x = x.reshape(B, C * T_pooled, H, W)  # (B, 1024, 512, 512)
+        x = x.reshape(B, C * T_pooled, H, W)  # (B, 1024, 128, 128)
 
         # 2D convolutions: final spatial features
-        x = self.conv2d(x)  # (B, 155, 512, 512)
+        x = self.conv2d(x)  # (B, out_channels, 128, 128)
 
         return x
 
@@ -100,7 +108,8 @@ class PriorFusionModule(nn.Module):
     """
     Prior fusion module that adapts perfusion prior maps.
 
-    Processes 5 perfusion maps (CBF, CBV, MTT, Tmax, TTP) using 1x1 Conv + BN.
+    Processes 5 perfusion maps (CBF, CBV, MTT, Tmax, TTP) using Conv + BN.
+    Downsamples from 512x512 to 128x128 to match FrontendEncoder output.
     """
 
     def __init__(self, in_channels: int = 5, out_channels: int = 5):
@@ -112,9 +121,12 @@ class PriorFusionModule(nn.Module):
         super(PriorFusionModule, self).__init__()
 
         self.adapter = nn.Sequential(
+            # 1x1 conv to mix channels
             nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=False),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)
+            nn.ReLU(inplace=True),
+            # Downsample 512->128 (4x) to match FrontendEncoder spatial output
+            nn.AvgPool2d(kernel_size=4, stride=4)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -123,7 +135,7 @@ class PriorFusionModule(nn.Module):
             x: Prior maps of shape (B, 5, 512, 512)
 
         Returns:
-            Adapted prior features of shape (B, 5, 512, 512)
+            Adapted prior features of shape (B, 5, 128, 128)
         """
         return self.adapter(x)
 
@@ -152,18 +164,19 @@ class ModifiedResNet(nn.Module):
         super(ModifiedResNet, self).__init__()
 
         # Load base ResNet model
-        resnet_models = {
-            'resnet18': resnet18,
-            'resnet34': resnet34,
-            'resnet50': resnet50,
-            'resnet101': resnet101,
-            'resnet152': resnet152
+        resnet_configs = {
+            'resnet18':  (resnet18,  ResNet18_Weights.IMAGENET1K_V1),
+            'resnet34':  (resnet34,  ResNet34_Weights.IMAGENET1K_V1),
+            'resnet50':  (resnet50,  ResNet50_Weights.IMAGENET1K_V1),
+            'resnet101': (resnet101, ResNet101_Weights.IMAGENET1K_V1),
+            'resnet152': (resnet152, ResNet152_Weights.IMAGENET1K_V1),
         }
 
-        if resnet_type not in resnet_models:
-            raise ValueError(f"resnet_type must be one of {list(resnet_models.keys())}")
+        if resnet_type not in resnet_configs:
+            raise ValueError(f"resnet_type must be one of {list(resnet_configs.keys())}")
 
-        base_model = resnet_models[resnet_type](pretrained=pretrained)
+        model_fn, weights = resnet_configs[resnet_type]
+        base_model = model_fn(weights=weights if pretrained else None)
 
         # Create modified conv1 layer with custom input channels
         original_conv1 = base_model.conv1
@@ -274,9 +287,9 @@ class CTPClassificationNet(nn.Module):
     Combines raw 4D CTP data with perfusion prior maps for stroke classification.
 
     Pipeline:
-        1. Raw CTP (B, 512, 512, 32, T) -> Frontend Encoder -> (B, 155, 512, 512)
-        2. Prior maps (B, 5, 512, 512) -> Prior Fusion -> (B, 5, 512, 512)
-        3. Concatenate -> (B, 160, 512, 512)
+        1. Raw CTP (B, 512, 512, 32, T) -> Frontend Encoder -> (B, 155, 128, 128)
+        2. Prior maps (B, 5, 512, 512) -> Prior Fusion -> (B, 5, 128, 128)
+        3. Concatenate -> (B, 160, 128, 128)
         4. Modified ResNet -> (B, num_classes)
     """
 
@@ -333,7 +346,7 @@ class CTPClassificationNet(nn.Module):
 
         Args:
             ctp_data: Raw CTP 4D data of shape (B, 512, 512, 32, T)
-                     where T is num_time_points (20 or 21)
+                     where T can be any positive integer (20, 21, 22, ...)
             prior_maps: Perfusion prior maps of shape (B, 5, 512, 512)
                        Channels: [CBF, CBV, MTT, Tmax, TTP]
 

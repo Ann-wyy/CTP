@@ -2,6 +2,8 @@
 """
 CSV文件验证脚本
 用于验证训练数据CSV文件的格式和完整性
+
+CSV格式: label,image_path,mask_path
 """
 
 import argparse
@@ -37,7 +39,7 @@ def validate_csv(csv_file, check_files=False):
 
     # 检查必需列
     print("\n【检查列】")
-    required_cols = ['label', 'nii_path', 'time_points', 'mask_path']
+    required_cols = ['label', 'image_path', 'mask_path']
     missing_cols = [col for col in required_cols if col not in df.columns]
 
     if missing_cols:
@@ -46,19 +48,6 @@ def validate_csv(csv_file, check_files=False):
         return False
     else:
         print(f"✓ 所有必需列存在: {required_cols}")
-
-    # 检查time_points值
-    print("\n【检查time_points】")
-    # 检查是否为正整数
-    valid_tp = (df['time_points'] > 0) & (df['time_points'] == df['time_points'].astype(int))
-    invalid_tp = df[~valid_tp]
-    if len(invalid_tp) > 0:
-        print(f"❌ 发现 {len(invalid_tp)} 个无效time_points值 (必须为正整数):")
-        print(invalid_tp[['nii_path', 'time_points']].head())
-        return False
-    else:
-        unique_tps = sorted(df['time_points'].unique())
-        print(f"✓ time_points值有效，包含时间点: {unique_tps}")
 
     # 检查空值
     print("\n【检查空值】")
@@ -74,11 +63,6 @@ def validate_csv(csv_file, check_files=False):
     # 数据统计
     print("\n【数据统计】")
     print(f"总样本数: {len(df)}")
-    print(f"\n时间点分布:")
-    tp_counts = df['time_points'].value_counts().sort_index()
-    for tp, count in tp_counts.items():
-        print(f"  T={tp}: {count} 个样本 ({count/len(df)*100:.1f}%)")
-
     print(f"\n类别分布:")
     label_counts = df['label'].value_counts().sort_index()
     for label, count in label_counts.items():
@@ -96,71 +80,26 @@ def validate_csv(csv_file, check_files=False):
     # 检查文件存在性
     if check_files:
         print("\n【检查文件存在性】")
-        print("检查CTP文件...")
 
-        missing_ctp = []
-        for idx, row in df.iterrows():
-            if not Path(row['nii_path']).exists():
-                missing_ctp.append(row['nii_path'])
+        missing_images = []
+        missing_masks  = []
+        for _, row in df.iterrows():
+            if not Path(row['image_path']).exists():
+                missing_images.append(row['image_path'])
+            if not Path(row['mask_path']).exists():
+                missing_masks.append(row['mask_path'])
 
-        if missing_ctp:
-            print(f"❌ 发现 {len(missing_ctp)} 个CTP文件不存在:")
-            for f in missing_ctp[:5]:  # 只显示前5个
-                print(f"   - {f}")
-            if len(missing_ctp) > 5:
-                print(f"   ... 还有 {len(missing_ctp)-5} 个")
-        else:
-            print(f"✓ 所有CTP文件存在")
-
-        print("\n检查特征图目录...")
-        missing_features = []
-        incomplete_features = []
-
-        feature_names = [
-            'generated_cbf.nii.gz',
-            'generated_cbv.nii.gz',
-            'generated_mtt.nii.gz',
-            'generated_tmax.nii.gz',
-            'generated_ttp.nii.gz'
-        ]
-
-        for idx, row in df.iterrows():
-            features_dir = Path(row['mask_path'])
-
-            if not features_dir.exists():
-                missing_features.append(str(features_dir))
+        for label, missing in [('image_path', missing_images), ('mask_path', missing_masks)]:
+            if missing:
+                print(f"❌ 发现 {len(missing)} 个 {label} 文件不存在:")
+                for f in missing[:5]:
+                    print(f"   - {f}")
+                if len(missing) > 5:
+                    print(f"   ... 还有 {len(missing)-5} 个")
             else:
-                # 检查是否包含所有5个特征图
-                missing_files = []
-                for fname in feature_names:
-                    if not (features_dir / fname).exists():
-                        missing_files.append(fname)
+                print(f"✓ 所有 {label} 文件存在")
 
-                if missing_files:
-                    incomplete_features.append({
-                        'dir': str(features_dir),
-                        'missing': missing_files
-                    })
-
-        if missing_features:
-            print(f"❌ 发现 {len(missing_features)} 个特征图目录不存在:")
-            for d in missing_features[:5]:
-                print(f"   - {d}")
-            if len(missing_features) > 5:
-                print(f"   ... 还有 {len(missing_features)-5} 个")
-
-        if incomplete_features:
-            print(f"❌ 发现 {len(incomplete_features)} 个目录缺少特征图文件:")
-            for item in incomplete_features[:3]:
-                print(f"   - {item['dir']}")
-                print(f"     缺少: {', '.join(item['missing'])}")
-            if len(incomplete_features) > 3:
-                print(f"   ... 还有 {len(incomplete_features)-3} 个")
-
-        if not missing_features and not incomplete_features:
-            print(f"✓ 所有特征图目录完整")
-
-        if missing_ctp or missing_features or incomplete_features:
+        if missing_images or missing_masks:
             return False
 
     # 最终结果

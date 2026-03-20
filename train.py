@@ -5,31 +5,21 @@ CTP分类模型训练脚本（统一3D卷积模型）
 使用YAML配置文件进行训练:
   python train.py --config config.yaml
 
-CSV格式要求（4列，带表头）:
-label,nii_path,time_points,mask_path
-0,/path/to/ctp_001.nii.gz,21,/path/to/features_001/
-1,/path/to/ctp_002.nii.gz,22,/path/to/features_002/
-0,/path/to/ctp_003.nii.gz,20,/path/to/features_003/
-...
+CSV格式要求（3列，带表头）:
+label,image_path,mask_path
+0,/data/.../A110034307/images/Head Volume Perfusion_5.0 x 5.0_301.pth,/data/.../A110034307/mask/Head Volume Perfusion_5.0 x 5.0_301_mask.pth
+1,/data/.../A110034308/images/Head Volume Perfusion_5.0 x 5.0_301.pth,/data/.../A110034308/mask/Head Volume Perfusion_5.0 x 5.0_301_mask.pth
 
 说明：
-- label: 分类标签（0, 1, 2, ...）
-- nii_path: CTP数据文件路径 (.nii.gz)
-- time_points: 时间点数量（正整数，如20, 21, 22等）
-- mask_path: 特征图所在目录（包含5个.nii.gz文件）
+- label:      分类标签（0, 1, 2, ...）
+- image_path: CTP图像 .pth 文件路径，tensor shape (H, W, Z, T)
+- mask_path:  Prior图 .pth 文件路径，tensor shape (C, H, W)
 
 特性：
 - ✅ 使用统一的3D卷积模型处理任意时间点
-- ✅ 支持混合时间点的数据集（同一个数据集可包含不同时间点）
+- ✅ 直接加载 .pth 格式预处理数据，无需额外转换
 - ✅ 通过自适应池化自动处理不同时间点，无需多个模型
 - ✅ 支持混合精度训练（AMP）减少显存占用
-
-mask_path目录中应包含:
-- generated_cbf.nii.gz
-- generated_cbv.nii.gz
-- generated_mtt.nii.gz
-- generated_tmax.nii.gz
-- generated_ttp.nii.gz
 """
 
 import os
@@ -39,7 +29,6 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from collections import Counter
 
 import torch
 import torch.nn as nn
@@ -49,8 +38,6 @@ from torch.amp import autocast, GradScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 import yaml
-import nibabel as nib
-from scipy.ndimage import zoom
 from ctp_classification_model import CTPClassificationNet
 
 
@@ -64,35 +51,35 @@ def load_config(config_path):
 
 # ==================== Dataset类 ====================
 class CTPDataset(Dataset):
-    """CTP数据集类，支持任意混合时间点数据（T=20, 21, 22, ...）"""
+    """
+    CTP数据集类，直接加载预处理好的 .pth 张量文件。
+
+    CSV格式:
+        label,image_path,mask_path
+        0,/data/.../images/xxx.pth,/data/.../mask/xxx_mask.pth
+
+    期望的张量维度:
+        image_path -> (H, W, Z, T)  4D CTP体积，最后一维为时间轴
+        mask_path  -> (C, H, W)     C通道的先验图（C通常为5）
+    """
 
     def __init__(self, csv_file, transform=None):
         """
         Args:
-            csv_file: CSV文件路径，包含label, nii_path, time_points, mask_path列
-            transform: 可选的数据增强函数
+            csv_file:  CSV文件路径，包含 label, image_path, mask_path 三列
+            transform: 可选的数据增强函数，接收 (ctp, mask) 返回 (ctp, mask)
         """
         self.data_df = pd.read_csv(csv_file)
         self.transform = transform
 
-        # 验证CSV格式（支持两种列名格式）
-        required_columns = ['label', 'nii_path', 'time_points', 'mask_path']
+        required_columns = ['label', 'image_path', 'mask_path']
         for col in required_columns:
             if col not in self.data_df.columns:
-                raise ValueError(f"CSV文件缺少必需列: {col}，当前列名: {list(self.data_df.columns)}")
-
-        # 验证time_points为正整数
-        valid_time_points = (self.data_df['time_points'] > 0) & (self.data_df['time_points'] == self.data_df['time_points'].astype(int))
-        if not valid_time_points.all():
-            invalid_values = self.data_df.loc[~valid_time_points, 'time_points'].unique()
-            raise ValueError(f"time_points列包含无效值: {invalid_values}. 必须为正整数")
-
-        # 显示支持的时间点
-        unique_time_points = sorted(self.data_df['time_points'].unique())
-        print(f"数据集包含的时间点: {unique_time_points}")
+                raise ValueError(
+                    f"CSV文件缺少必需列: '{col}'，当前列名: {list(self.data_df.columns)}"
+                )
 
         print(f"加载数据集: {len(self.data_df)} 个样本")
-        print(f"时间点分布:\n{self.data_df['time_points'].value_counts()}")
         print(f"类别分布:\n{self.data_df['label'].value_counts()}")
 
     def __len__(self):
@@ -101,160 +88,49 @@ class CTPDataset(Dataset):
     def __getitem__(self, idx):
         row = self.data_df.iloc[idx]
 
-        # 获取时间点数
-        time_points = int(row['time_points'])
+        # 直接加载 .pth 张量，无需额外处理
+        ctp_data  = self._load_pth(row['image_path'])   # (H, W, Z, T)
+        mask_data = self._load_pth(row['mask_path'])    # (C, H, W)
+        label     = torch.tensor(int(row['label']), dtype=torch.long)
 
-        # 加载CTP数据
-        ctp_data = self._load_ctp(row['nii_path'], expected_time_points=time_points)
-
-        # 加载5个特征图
-        prior_maps = self._load_prior_maps(row['mask_path'])
-
-        # 获取标签
-        label = int(row['label'])
-
-        # 数据增强（如果有）
         if self.transform:
-            ctp_data, prior_maps = self.transform(ctp_data, prior_maps)
+            ctp_data, mask_data = self.transform(ctp_data, mask_data)
 
-        # 转换为tensor
-        ctp_data = torch.from_numpy(ctp_data).float()
-        prior_maps = torch.from_numpy(prior_maps).float()
-        label = torch.tensor(label, dtype=torch.long)
+        return ctp_data, mask_data, label
 
-        return ctp_data, prior_maps, label, time_points
-
-    def _load_ctp(self, ctp_path, expected_time_points):
+    def _load_pth(self, path: str) -> torch.Tensor:
         """
-        加载CTP .nii.gz文件
+        加载 .pth 文件并返回 float32 张量。
 
         Args:
-            ctp_path: CTP文件路径
-            expected_time_points: 期望的时间点数（20或21）
+            path: .pth 文件路径
 
         Returns:
-            numpy array of shape (512, 512, 32, T)
+            torch.Tensor (float32)
         """
-        try:
-            img = nib.load(ctp_path)
-            data = img.get_fdata()
+        if not Path(path).exists():
+            raise FileNotFoundError(f"文件不存在: {path}")
 
-            # 验证时间点数
-            if data.ndim != 4:
-                raise ValueError(f"CTP数据应该是4D的，但得到{data.ndim}D: {data.shape}")
+        data = torch.load(path, map_location='cpu', weights_only=False)
 
-            actual_time_points = data.shape[-1]
-            if actual_time_points != expected_time_points:
-                raise ValueError(
-                    f"CTP数据时间点不匹配。CSV中为{expected_time_points}，"
-                    f"但文件中为{actual_time_points}: {ctp_path}"
-                )
+        if not isinstance(data, torch.Tensor):
+            raise TypeError(
+                f"期望 torch.Tensor，得到 {type(data).__name__}。\n"
+                f"文件: {path}\n"
+                f"请确认 .pth 文件由 torch.save(tensor, path) 直接保存。"
+            )
 
-            # 调整空间尺寸为 (512, 512, 32)
-            target_shape = (512, 512, 32, actual_time_points)
-            if data.shape != target_shape:
-                data = self._resize_4d(data, target_shape)
-
-            return data.astype(np.float32)
-
-        except Exception as e:
-            raise RuntimeError(f"加载CTP文件失败 {ctp_path}: {e}")
-
-    def _load_prior_maps(self, features_dir):
-        """
-        加载5个特征图
-
-        Args:
-            features_dir: 特征图目录路径
-
-        Returns:
-            numpy array of shape (5, 512, 512)
-        """
-        features_dir = Path(features_dir)
-
-        feature_names = [
-            'generated_cbf.nii.gz',
-            'generated_cbv.nii.gz',
-            'generated_mtt.nii.gz',
-            'generated_tmax.nii.gz',
-            'generated_ttp.nii.gz'
-        ]
-
-        prior_maps = []
-
-        for feature_name in feature_names:
-            feature_path = features_dir / feature_name
-
-            if not feature_path.exists():
-                raise FileNotFoundError(f"特征图不存在: {feature_path}")
-
-            try:
-                img = nib.load(str(feature_path))
-                data = img.get_fdata()
-
-                # 处理不同维度的特征图
-                if data.ndim == 2:
-                    # 已经是2D
-                    pass
-                elif data.ndim == 3:
-                    # 3D图像，取中间层
-                    data = data[:, :, data.shape[2] // 2]
-                elif data.ndim == 4:
-                    # 4D图像，先在时间维度平均，再取中间层
-                    data = np.mean(data, axis=-1)
-                    if data.ndim == 3:
-                        data = data[:, :, data.shape[2] // 2]
-                else:
-                    raise ValueError(f"不支持的特征图维度: {data.ndim}D")
-
-                # 确保尺寸为 512x512
-                if data.shape != (512, 512):
-                    data = self._resize_2d(data, (512, 512))
-
-                prior_maps.append(data)
-
-            except Exception as e:
-                raise RuntimeError(f"加载特征图失败 {feature_path}: {e}")
-
-        # 堆叠为 (5, 512, 512)
-        prior_maps = np.stack(prior_maps, axis=0).astype(np.float32)
-
-        return prior_maps
-
-    def _resize_4d(self, volume, target_shape):
-        """调整4D体积大小"""
-        factors = [t / s for t, s in zip(target_shape, volume.shape)]
-        resized = zoom(volume, factors, order=1)
-        return resized
-
-    def _resize_2d(self, image, target_shape):
-        """调整2D图像大小"""
-        factors = [t / s for t, s in zip(target_shape, image.shape)]
-        resized = zoom(image, factors, order=1)
-        return resized
+        return data.float()
 
 
 def collate_fn_default(batch):
     """
-    标准collate函数，直接堆叠batch数据
-
-    3D卷积模型通过AdaptivePooling处理不同时间点，
-    因此不再需要按time_points分组
+    标准collate函数，直接堆叠batch数据。
+    3D卷积 + AdaptivePooling 天然支持不同时间点，无需按T分组。
     """
-    ctp_data_list = []
-    prior_maps_list = []
-    labels_list = []
-
-    for ctp_data, prior_maps, label, time_points in batch:
-        ctp_data_list.append(ctp_data)
-        prior_maps_list.append(prior_maps)
-        labels_list.append(label)
-
-    # Stack成batch
-    ctp_batch = torch.stack(ctp_data_list)
-    prior_batch = torch.stack(prior_maps_list)
-    label_batch = torch.stack(labels_list)
-
+    ctp_batch   = torch.stack([item[0] for item in batch])
+    prior_batch = torch.stack([item[1] for item in batch])
+    label_batch = torch.stack([item[2] for item in batch])
     return ctp_batch, prior_batch, label_batch
 
 
@@ -407,14 +283,6 @@ def main(args):
     print(f"{'='*70}")
 
     full_dataset = CTPDataset(args.csv_file)
-
-    # 统计时间点分布
-    time_point_counts = Counter(full_dataset.data_df['time_points'])
-    unique_time_points = sorted(time_point_counts.keys())
-
-    print(f"\n数据集时间点统计:")
-    for tp in unique_time_points:
-        print(f"  T={tp}: {time_point_counts[tp]} 个样本")
 
     # 划分训练集和验证集
     train_indices, val_indices = train_test_split(

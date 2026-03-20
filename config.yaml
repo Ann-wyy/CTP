@@ -1,0 +1,100 @@
+# CTP分类模型训练配置
+# 根据您的实际情况修改下面的参数
+
+# ==================== 数据配置 ====================
+csv_file: data_example.csv  # CSV数据文件路径
+
+# 验证集比例（0.1-0.3之间）
+val_split: 0.2
+
+# 分类类别数
+# 2 = 二分类（正常 vs 异常）
+# 3 = 三分类（正常 vs 缺血 vs 出血）
+# ...
+num_classes: 2
+
+
+# ==================== 模型配置 ====================
+# ResNet模型类型
+# - resnet18:  ~11M参数, 适合小数据集或快速实验
+# - resnet34:  ~21M参数, 中小数据集
+# - resnet50:  ~23M参数, 推荐，性能和速度平衡
+# - resnet101: ~42M参数, 大数据集
+# - resnet152: ~58M参数, 超大数据集
+resnet_type: resnet50
+
+# 是否使用ImageNet预训练权重
+# true:  推荐，通常收敛更快，效果更好
+# false: 从头训练，适合数据量很大的情况
+pretrained: true
+
+
+# ==================== 训练配置 ====================
+# 训练轮数
+# 建议：小数据集(50-100), 大数据集(30-50)
+epochs: 50
+
+# 批次大小
+# 根据GPU显存调整:
+#   - 8GB显存: batch_size=1-2
+#   - 12-16GB: batch_size=2-4
+#   - 24GB+:    batch_size=4-8
+batch_size: 4
+
+# 学习率
+# 推荐范围: 0.0001 - 0.001
+# 小数据集: 0.0001
+# 大数据集: 0.001
+lr: 0.001
+
+# 权重衰减（L2正则化）
+# 推荐范围: 1e-5 - 1e-4
+weight_decay: 0.00001
+
+# 类别权重（处理类别不平衡）
+# null: 不使用权重
+# [1.0, 3.0]: 给第2类3倍权重
+# [1.0, 2.0, 3.0]: 三分类权重
+class_weights: null
+
+# 混合精度训练（推荐在A100/V100/RTX 3090等GPU上启用）
+# true:  启用FP16混合精度，显存减少50%，速度提升30-50%
+# false: 使用FP32标准精度
+use_amp: false
+
+
+# ==================== 早停配置 ====================
+# 是否启用早停（防止过拟合）
+early_stopping: true
+
+# 早停耐心值
+# 验证F1连续N个epoch不提升则停止训练
+# 推荐: 10-20
+patience: 10
+
+
+# ==================== 其他配置 ====================
+# 输出目录（建议每次实验使用不同名称）
+output_dir: ./output/experiment_01
+
+# DataLoader工作线程数
+# 推荐: CPU核心数的一半
+# 4核CPU: num_workers=2
+# 8核CPU: num_workers=4
+num_workers: 4
+
+# 随机种子（确保结果可复现）
+seed: 42
+
+
+# ==================== 使用提示 ====================
+# 1. 准备CSV数据文件（格式见data_example.csv）
+# 2. 验证数据: python validate_csv.py your_data.csv
+# 3. 修改上面的参数（特别是csv_file和output_dir）
+# 4. 开始训练: python train.py --config config.yaml
+#
+# 常见问题:
+# - 显存不足: 减小batch_size或使用resnet18
+# - 类别不平衡: 设置class_weights，如[1.0, 3.0]
+# - 过拟合: 启用early_stopping，增大weight_decay
+# - 欠拟合: 增加epochs，使用更大的模型

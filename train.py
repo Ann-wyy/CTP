@@ -52,11 +52,12 @@ def load_config(config_path):
 # ==================== Dataset类 ====================
 class CTPDataset(Dataset):
     """
-    CTP数据集类，直接加载预处理好的 .pth 张量文件。
+    CTP数据集类，直接加载预处理好的张量文件，支持 .pth 和 .npy 两种格式。
 
     CSV格式:
         label,image_path,mask_path
         0,/data/.../images/xxx.pth,/data/.../mask/xxx_mask.pth
+        0,/data/.../images/xxx.npy,/data/.../mask/xxx_mask.npy
 
     期望的张量维度:
         image_path -> (H, W, Z, T)  4D CTP体积，最后一维为时间轴
@@ -88,9 +89,9 @@ class CTPDataset(Dataset):
     def __getitem__(self, idx):
         row = self.data_df.iloc[idx]
 
-        # 直接加载 .pth 张量，无需额外处理
-        ctp_data  = self._load_pth(row['image_path'])   # (H, W, Z, T)
-        mask_data = self._load_pth(row['mask_path'])    # (C, H, W)
+        # 支持 .pth / .npy 两种格式，自动识别
+        ctp_data  = self._load_tensor(row['image_path'])   # (H, W, Z, T)
+        mask_data = self._load_tensor(row['mask_path'])    # (C, H, W)
         label     = torch.tensor(int(row['label']), dtype=torch.long)
 
         if self.transform:
@@ -98,27 +99,34 @@ class CTPDataset(Dataset):
 
         return ctp_data, mask_data, label
 
-    def _load_pth(self, path: str) -> torch.Tensor:
+    def _load_tensor(self, path: str) -> torch.Tensor:
         """
-        加载 .pth 文件并返回 float32 张量。
+        加载 .pth 或 .npy 文件并返回 float32 张量。
 
         Args:
-            path: .pth 文件路径
+            path: .pth 或 .npy 文件路径
 
         Returns:
             torch.Tensor (float32)
         """
-        if not Path(path).exists():
+        p = Path(path)
+        if not p.exists():
             raise FileNotFoundError(f"文件不存在: {path}")
 
-        data = torch.load(path, map_location='cpu', weights_only=False)
+        suffix = p.suffix.lower()
 
-        if not isinstance(data, torch.Tensor):
-            raise TypeError(
-                f"期望 torch.Tensor，得到 {type(data).__name__}。\n"
-                f"文件: {path}\n"
-                f"请确认 .pth 文件由 torch.save(tensor, path) 直接保存。"
-            )
+        if suffix == '.npy':
+            data = torch.from_numpy(np.load(str(p)))
+        elif suffix == '.pth':
+            data = torch.load(str(p), map_location='cpu', weights_only=False)
+            if not isinstance(data, torch.Tensor):
+                raise TypeError(
+                    f"期望 torch.Tensor，得到 {type(data).__name__}。\n"
+                    f"文件: {path}\n"
+                    f"请确认 .pth 文件由 torch.save(tensor, path) 直接保存。"
+                )
+        else:
+            raise ValueError(f"不支持的文件格式: '{suffix}'，仅支持 .pth / .npy。路径: {path}")
 
         return data.float()
 

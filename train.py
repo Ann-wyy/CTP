@@ -133,10 +133,20 @@ class CTPDataset(Dataset):
 
 def collate_fn_default(batch):
     """
-    标准collate函数，直接堆叠batch数据。
-    3D卷积 + AdaptivePooling 天然支持不同时间点，无需按T分组。
+    Collate with T-dim zero-padding so samples with different time points can
+    be stacked.  The model's AdaptiveAvgPool3d handles any T, so padding is safe.
     """
-    ctp_batch   = torch.stack([item[0] for item in batch])
+    max_t = max(item[0].shape[-1] for item in batch)
+    ctp_list = []
+    for item in batch:
+        ctp = item[0]                      # (H, W, Z, T_i)
+        t = ctp.shape[-1]
+        if t < max_t:
+            pad = torch.zeros(*ctp.shape[:-1], max_t - t, dtype=ctp.dtype)
+            ctp = torch.cat([ctp, pad], dim=-1)
+        ctp_list.append(ctp)
+
+    ctp_batch   = torch.stack(ctp_list)
     prior_batch = torch.stack([item[1] for item in batch])
     label_batch = torch.stack([item[2] for item in batch])
     return ctp_batch, prior_batch, label_batch

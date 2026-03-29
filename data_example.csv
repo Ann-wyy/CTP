@@ -1,0 +1,5 @@
+label,image_path,mask_path
+0,/data/truenas_B2/yyi/data/CTP_pth/A110034307/images/Head Volume Perfusion_5.0 x 5.0_301.pth,/data/truenas_B2/yyi/data/CTP_pth/A110034307/mask/Head Volume Perfusion_5.0 x 5.0_301_mask.pth
+1,/data/truenas_B2/yyi/data/CTP_pth/A110034308/images/Head Volume Perfusion_5.0 x 5.0_301.pth,/data/truenas_B2/yyi/data/CTP_pth/A110034308/mask/Head Volume Perfusion_5.0 x 5.0_301_mask.pth
+0,/data/truenas_B2/yyi/data/CTP_pth/A110034309/images/Head Volume Perfusion_5.0 x 5.0_301.pth,/data/truenas_B2/yyi/data/CTP_pth/A110034309/mask/Head Volume Perfusion_5.0 x 5.0_301_mask.pth
+1,/data/truenas_B2/yyi/data/CTP_pth/A110034310/images/Head Volume Perfusion_5.0 x 5.0_301.pth,/data/truenas_B2/yyi/data/CTP_pth/A110034310/mask/Head Volume Perfusion_5.0 x 5.0_301_mask.pth

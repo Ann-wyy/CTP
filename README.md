@@ -1,316 +1,141 @@
-# CTP Classification Network
+# CTP分类模型
 
-A PyTorch implementation of a CT Perfusion (CTP) classification network that combines raw 4D CTP data with perfusion prior maps for stroke classification.
+基于ResNet的CT灌注(CTP)图像分类模型，用于脑卒中分类任务。
 
-## Architecture Overview
+## 项目结构
 
-The network consists of three main components:
+```
+.
+├── ctp_classification_model.py    # 核心模型代码
+├── train.py                       # 训练脚本
+├── validate_csv.py                # CSV数据验证工具
+├── config.yaml                    # 配置文件模板
+└── requirements.txt               # Python依赖
+```
 
-1. **Frontend Encoder**: Processes raw 4D CTP data
-   - Input: `(B, 512, 512, 32, T)` where T ∈ {20, 21}
-   - Reshapes to: `(B, 32*T, 512, 512)`
-   - Output: `(B, 155, 512, 512)` learned features
+## 快速开始
 
-2. **Prior Fusion Module**: Adapts perfusion prior maps
-   - Input: `(B, 5, 512, 512)` - 5 perfusion maps (CBF, CBV, MTT, Tmax, TTP)
-   - Output: `(B, 5, 512, 512)` adapted features
-
-3. **Modified ResNet Backbone**: Classification
-   - Input: `(B, 160, 512, 512)` - concatenated learned + prior features
-   - Output: `(B, num_classes)` classification logits
-
-## Features
-
-- ✅ Flexible time points: supports both 20 and 21 time points
-- ✅ Multi-class classification support
-- ✅ Multiple ResNet backbones (ResNet18/34/50/101/152)
-- ✅ Optional pretrained weights
-- ✅ Feature extraction capabilities
-- ✅ Clean, well-documented code
-
-## Installation
+### 1. 安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Requirements:
-- Python >= 3.8
-- PyTorch >= 2.0.0
-- torchvision >= 0.15.0
-- numpy >= 1.24.0
+### 2. 准备数据
 
-## Quick Start
+创建CSV文件，格式如下（**必须包含表头**）：
 
-### Basic Usage
+```csv
+label,nii_path,time_points,mask_path
+0,/path/to/patient001/ctp.nii.gz,20,/path/to/patient001/features
+1,/path/to/patient002/ctp.nii.gz,21,/path/to/patient002/features
+0,/path/to/patient003/ctp.nii.gz,22,/path/to/patient003/features
+```
+
+**列说明：**
+- **label**: 标签（0=正常，1=异常，支持多分类）
+- **nii_path**: CTP图像路径（.nii.gz格式，形状为512×512×32×T）
+- **time_points**: 时间点数量（T，可以是20、21、22等任意正整数）
+- **mask_path**: 特征图目录（包含5个.nii.gz文件：generated_cbf.nii.gz, generated_cbv.nii.gz, generated_mtt.nii.gz, generated_tmax.nii.gz, generated_ttp.nii.gz）
+
+**验证数据格式：**
+
+```bash
+python validate_csv.py data.csv
+```
+
+### 3. 配置训练参数
+
+编辑 `config.yaml`：
+
+```yaml
+csv_file: /path/to/your/data.csv    # 数据CSV路径
+val_split: 0.2                       # 验证集比例
+num_classes: 2                       # 分类类别数
+resnet_type: resnet50                # 模型类型
+pretrained: true                     # 使用ImageNet预训练
+epochs: 50                           # 训练轮数
+batch_size: 4                        # 批次大小
+lr: 0.001                            # 学习率
+output_dir: ./output/exp_01          # 输出目录
+```
+
+**关键参数说明：**
+
+- **resnet_type**: `resnet18`（快速）| `resnet34` | `resnet50`（推荐）| `resnet101` | `resnet152`（大模型）
+- **batch_size**: 根据GPU显存调整（8GB显存建议1-2，16GB建议2-4）
+- **class_weights**: 类别不平衡时使用，例如 `[1.0, 3.0]` 给第2类3倍权重
+- **use_amp**: 混合精度训练（推荐在A100/V100/RTX 3090上启用，可减少50%显存，加速30-50%）
+
+### 4. 开始训练
+
+```bash
+python train.py --config config.yaml
+```
+
+训练过程会自动：
+- 按时间点数量分组训练（每个时间点T创建一个独立模型）
+- 保存最佳模型到 `output_dir/best_model_tXX.pth`
+- 保存训练日志到 `output_dir/training.log`
+- 在验证F1不提升时早停（如启用early_stopping）
+
+## 模型使用
+
+### 推理示例
 
 ```python
 import torch
 from ctp_classification_model import create_ctp_classifier
 
-# Create model
+# 1. 创建模型
 model = create_ctp_classifier(
-    num_time_points=21,
+    num_time_points=21,      # 根据数据时间点数
     num_classes=2,
     resnet_type='resnet50',
     pretrained=False
 )
 
-# Prepare input data
-ctp_data = torch.randn(2, 512, 512, 32, 21)      # Raw CTP 4D data
-prior_maps = torch.randn(2, 5, 512, 512)         # Perfusion maps
-
-# Forward pass
-output = model(ctp_data, prior_maps)
-print(output.shape)  # (2, 2)
-```
-
-### Training Example
-
-```python
-import torch.nn as nn
-import torch.optim as optim
-
-# Setup
-model = create_ctp_classifier(num_time_points=21, num_classes=2)
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
-
-# Training loop
-model.train()
-for epoch in range(num_epochs):
-    outputs = model(ctp_data, prior_maps)
-    loss = criterion(outputs, labels)
-
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-```
-
-### Feature Extraction
-
-```python
-# Extract intermediate features
-learned, priors, combined = model.get_feature_maps(ctp_data, prior_maps)
-
-print(learned.shape)   # (B, 155, 512, 512)
-print(priors.shape)    # (B, 5, 512, 512)
-print(combined.shape)  # (B, 160, 512, 512)
-```
-
-## Model Configurations
-
-### ResNet Variants
-
-```python
-# Lightweight model
-model = create_ctp_classifier(resnet_type='resnet18')
-
-# Balanced model (recommended)
-model = create_ctp_classifier(resnet_type='resnet50')
-
-# Heavy model
-model = create_ctp_classifier(resnet_type='resnet101')
-```
-
-### Time Points
-
-```python
-# For 20 time points
-model = create_ctp_classifier(num_time_points=20)  # Input: 32*20=640 channels
-
-# For 21 time points
-model = create_ctp_classifier(num_time_points=21)  # Input: 32*21=672 channels
-```
-
-### Multi-class Classification
-
-```python
-# Binary classification (stroke vs no stroke)
-model = create_ctp_classifier(num_classes=2)
-
-# Multi-class (e.g., no stroke, ischemic, hemorrhagic)
-model = create_ctp_classifier(num_classes=3)
-```
-
-## Input Data Format
-
-### CTP Data
-- Shape: `(B, 512, 512, 32, T)`
-- B: Batch size
-- 512 × 512: Spatial dimensions (H × W)
-- 32: Number of slices (Z)
-- T: Number of time points (20 or 21)
-
-### Prior Maps
-- Shape: `(B, 5, 512, 512)`
-- Channel 0: CBF (Cerebral Blood Flow)
-- Channel 1: CBV (Cerebral Blood Volume)
-- Channel 2: MTT (Mean Transit Time)
-- Channel 3: Tmax (Time to Maximum)
-- Channel 4: TTP (Time to Peak)
-
-## Model Parameters
-
-| ResNet Type | Parameters | Memory (approx) |
-|-------------|------------|-----------------|
-| ResNet18    | ~11M       | ~45 MB          |
-| ResNet34    | ~21M       | ~85 MB          |
-| ResNet50    | ~23M       | ~95 MB          |
-| ResNet101   | ~42M       | ~170 MB         |
-| ResNet152   | ~58M       | ~235 MB         |
-
-*Note: Actual memory usage depends on batch size and input resolution.*
-
-## Architecture Details
-
-### Frontend Encoder
-```
-Input (B, 512, 512, 32, T)
-  ↓ Reshape
-(B, 32*T, 512, 512)
-  ↓ 1×1 Conv + BN + ReLU
-(B, 256, 512, 512)
-  ↓ 3×3 Conv + BN + ReLU
-(B, 155, 512, 512)
-```
-
-### Prior Fusion Module
-```
-Input (B, 5, 512, 512)
-  ↓ 1×1 Conv + BN + ReLU
-Output (B, 5, 512, 512)
-```
-
-### Modified ResNet
-```
-Input (B, 160, 512, 512)
-  ↓ Modified Conv1 (160 channels)
-  ↓ BN + ReLU + MaxPool
-  ↓ Layer1-4 (ResNet blocks)
-  ↓ AvgPool + Flatten
-  ↓ FC
-Output (B, num_classes)
-```
-
-## Advanced Usage
-
-### Custom Configuration
-
-```python
-from ctp_classification_model import CTPClassificationNet
-
-model = CTPClassificationNet(
-    num_time_points=21,
-    num_classes=2,
-    resnet_type='resnet50',
-    pretrained=True,
-    learned_features=155,  # Custom number of learned features
-    prior_channels=5        # Number of prior maps
-)
-```
-
-### Pretrained Weights
-
-```python
-# Use pretrained ResNet weights (from ImageNet)
-# Useful for transfer learning
-model = create_ctp_classifier(pretrained=True)
-```
-
-### Model Saving and Loading
-
-```python
-# Save model
-torch.save(model.state_dict(), 'ctp_model.pth')
-
-# Load model
-model = create_ctp_classifier(num_time_points=21, num_classes=2)
-model.load_state_dict(torch.load('ctp_model.pth'))
+# 2. 加载训练好的权重
+checkpoint = torch.load('output/exp_01/best_model_t21.pth')
+model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
+
+# 3. 推理
+ctp_data = torch.randn(1, 512, 512, 32, 21)     # 原始CTP数据
+prior_maps = torch.randn(1, 5, 512, 512)        # 灌注特征图
+with torch.no_grad():
+    output = model(ctp_data, prior_maps)
+    pred = torch.argmax(output, dim=1)
+    print(f"预测类别: {pred.item()}")
 ```
 
-## Examples
+## 常见问题
 
-Run the example script to see various usage patterns:
+**Q: 支持哪些时间点数量？**
+A: 支持任意正整数（20、21、22、25等），模型会自动适配。
 
-```bash
-python example_usage.py
-```
+**Q: 显存不足怎么办？**
+A:
+1. 启用混合精度训练（设置`use_amp: true`，可减少50%显存）
+2. 减小`batch_size`（最小为1）
+3. 使用更小的`resnet_type`（如resnet18）
 
-This will demonstrate:
-1. Basic usage
-2. Training loop
-3. Feature extraction
-4. Different configurations
-5. Multi-class classification
-6. Model saving/loading
+**Q: 如何加速训练？**
+A:
+1. 启用混合精度训练（设置`use_amp: true`，在A100/V100/RTX 3090上可提速30-50%）
+2. 增大`batch_size`（如果显存允许）
+3. 增加`num_workers`（数据加载线程数）
 
-## Testing
+**Q: 类别不平衡怎么办？**
+A: 在config.yaml中设置`class_weights`，例如`[1.0, 3.0]`给少数类更高权重。
 
-Run the built-in test:
+**Q: 训练后在哪找模型？**
+A: 在`output_dir/best_model_tXX.pth`，其中XX是时间点数量。
 
-```bash
-python ctp_classification_model.py
-```
+## 引用
 
-This will test the model with dummy data and print:
-- Input/output shapes
-- Feature map shapes
-- Model parameter counts
+如果使用本代码，请引用相关论文。
 
-## Performance Considerations
+## 许可
 
-### Memory Optimization
-- Use smaller ResNet variants (ResNet18/34) for limited GPU memory
-- Reduce batch size if encountering OOM errors
-- Consider gradient checkpointing for very deep models
-
-### Speed Optimization
-- Use mixed precision training (AMP)
-- Enable cuDNN benchmarking: `torch.backends.cudnn.benchmark = True`
-- Use DataParallel or DistributedDataParallel for multi-GPU
-
-### Example: Mixed Precision Training
-
-```python
-from torch.cuda.amp import autocast, GradScaler
-
-scaler = GradScaler()
-
-for ctp_data, prior_maps, labels in dataloader:
-    optimizer.zero_grad()
-
-    with autocast():
-        outputs = model(ctp_data, prior_maps)
-        loss = criterion(outputs, labels)
-
-    scaler.scale(loss).backward()
-    scaler.step(optimizer)
-    scaler.update()
-```
-
-## Citation
-
-If you use this implementation in your research, please cite:
-
-```bibtex
-@software{ctp_classification_network,
-  title={CTP Classification Network},
-  author={Your Name},
-  year={2026},
-  url={https://github.com/yourusername/CTP}
-}
-```
-
-## License
-
-MIT License - feel free to use this code for research and commercial purposes.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## Contact
-
-For questions or issues, please open an issue on GitHub.
+[添加您的许可信息]
